@@ -238,14 +238,26 @@ async def fog(request) -> StreamingResponse:
 
 
 def _warm_up() -> None:
-    """Prime the hop-geometry cache (and, on PyPy, trigger JIT compilation of the
-    hot path) with one synthetic downtown query, so the first real user click is
-    hot rather than paying cold-cache / interpreter tax."""
+    """Prime the hop-geometry cache and, on PyPy, force the JIT to compile and
+    stabilise the hot paths BEFORE any user clicks — otherwise the first few real
+    queries pay interpreter + compilation cost and spike (we measured a ~1.3 s
+    outlier cold). We run several representative queries: different regions
+    (downtown / on-graph suburb / off-graph), and a mode-filtered one (exercises
+    the route_allowed branch), repeated so the JIT sees enough iterations."""
+    cases = [
+        (45.5017, -73.5673, ALL_MODES),          # downtown, all modes
+        (45.5017, -73.5673, {"metro", "rail"}),  # mode filter branch
+        (45.46, -73.62, ALL_MODES),              # west end
+        (45.55, -73.55, ALL_MODES),              # east / on-graph
+        (45.62, -73.50, ALL_MODES),              # far north (more off-graph)
+    ]
     t = time.perf_counter()
     try:
-        compute_isochrone(NET, 45.5017, -73.5673, _parse_time("08:00"),
-                          MAX_BUDGET_MIN * 60, allowed_modes=ALL_MODES, walk_graph=WALK)
-        print(f"Warm-up query done in {(time.perf_counter() - t) * 1000:.0f} ms")
+        for _ in range(2):                       # two passes so the JIT settles
+            for lat, lon, modes in cases:
+                compute_isochrone(NET, lat, lon, _parse_time("08:00"),
+                                  MAX_BUDGET_MIN * 60, allowed_modes=modes, walk_graph=WALK)
+        print(f"Warm-up: {2 * len(cases)} queries in {(time.perf_counter() - t) * 1000:.0f} ms")
     except Exception as e:                       # never let warm-up block serving
         print(f"Warm-up skipped: {e}")
 

@@ -57,7 +57,8 @@ function buildVeilGrid() {
       idxByKey.set(q + "," + r, veilFeatures.length);
       veilFeatures.push({
         type: "Feature",
-        properties: { travel: SENTINEL },
+        id: veilFeatures.length,           // stable id for feature-state reveal
+        properties: {},
         geometry: { type: "Polygon", coordinates: [hexCorners(q, r)] },
       });
     }
@@ -72,6 +73,7 @@ const map = new maplibregl.Map({
   maxPitch: 0,            // 2D only — no tilt axis (lighter to render)
   pitchWithRotate: false,
   fadeDuration: 0,
+  renderWorldCopies: false,   // never render repeated world copies (cheaper)
   // lock the view to the data extent so you can't pan/zoom out past the grey
   // zone (the hex grid only covers OSM_BBOX, with a small margin). maxBounds =
   // the bbox exactly (the grid extends a hair beyond, so the viewport is always
@@ -96,10 +98,17 @@ function overlayMap(container) {
     style: { version: 8, sources: {}, layers: [] },   // transparent, no tiles
     center: MONTREAL, zoom: 11, maxPitch: 0,
     interactive: false, attributionControl: false, fadeDuration: 0,
+    renderWorldCopies: false,
   });
 }
 const maskMap = overlayMap("maskmap");
 const spineMap = overlayMap("spinemap");
+// The mask map rasterises ~80k grey hexes and is then composited over the base
+// every frame via the `saturation` blend — the heaviest overlay. Render it at a
+// capped pixel ratio (the desaturation result reads detail from the colour map
+// below, so the mask's own resolution barely matters): up to 4x fewer pixels to
+// rasterise + blend on a retina display. Guarded — API varies by MapLibre build.
+try { if (maskMap.setPixelRatio) maskMap.setPixelRatio(Math.min(1.25, window.devicePixelRatio || 1)); } catch (e) {}
 let maskReady = false, spineReady = false;
 function syncOverlays() {
   const cam = {
@@ -111,6 +120,22 @@ function syncOverlays() {
 }
 map.on("move", syncOverlays);
 map.on("resize", () => { maskMap.resize(); spineMap.resize(); });
+
+// Shed per-frame work WHILE the camera is moving, restore it the moment it stops:
+//  • drop the panels' backdrop blur (CSS .panning), and
+//  • hide the spine arrows (a symbol layer with `symbol-placement: line`, whose
+//    label placement is recomputed every frame — expensive during a pan).
+// Re-placed once on moveend, so the only cost is at rest.
+map.on("movestart", () => {
+  document.body.classList.add("panning");
+  if (spineReady && spineMap.getLayer("spine-arrows"))
+    spineMap.setLayoutProperty("spine-arrows", "visibility", "none");
+});
+map.on("moveend", () => {
+  document.body.classList.remove("panning");
+  if (spineReady && spineMap.getLayer("spine-arrows"))
+    spineMap.setLayoutProperty("spine-arrows", "visibility", "visible");
+});
 
 const state = { origin: null, time: "08:00", modes: new Set(["metro", "bus", "rail"]), budget: 30 };
 let originMarker = null;
@@ -186,15 +211,20 @@ function makeArrowIcon() {
 // area (hexes filtered out) stays in full colour. See maskMap.on("load") below.
 maskMap.on("load", () => {
   buildVeilGrid();
-  // tolerance:0 stops MapLibre from simplifying away the hexes when zoomed out.
-  maskMap.addSource("veil", { type: "geojson", data: emptyFC(), tolerance: 0 });
+  // Geometry is uploaded to the GPU exactly ONCE here. The per-query reveal is
+  // then driven by feature-state (a cheap per-cell value) instead of re-setData-
+  // ing all ~80k hexes every 200 ms as the fog streams — that re-upload was the
+  // main click-time stutter. tolerance:0 keeps the hexes from being simplified.
+  maskMap.addSource("veil", { type: "geojson", tolerance: 0,
+    data: { type: "FeatureCollection", features: veilFeatures } });
   maskMap.addLayer({
     id: "veil",
     type: "fill",
     source: "veil",
-    // any fully-desaturated grey works — the `saturation` blend only reads the
-    // source's saturation (0) and applies it to the backdrop, keeping its detail.
-    paint: { "fill-color": "#808080", "fill-opacity": 1, "fill-antialias": false },
+    // grey (opacity 1, desaturates the colour map below) where a cell's streamed
+    // travel is unknown or over budget; transparent (0, reveals colour) where
+    // reachable within the cutoff. Any saturation-0 grey works for the blend.
+    paint: { "fill-color": "#808080", "fill-opacity": veilOpacity(state.budget * 60), "fill-antialias": false },
   });
   maskReady = true;
   drawBudget(state.budget * 60);
@@ -279,6 +309,12 @@ async function buildLegend() {
 const IS_BUS = ["==", ["get", "cls"], "bus"];
 const IS_SPINE = ["==", ["get", "cls"], "rail"];
 
+// fill-opacity expression for the veil: grey (1) where the cell's streamed travel
+// (feature-state) is unknown or beyond the cutoff; transparent (0) where reachable.
+function veilOpacity(cut) {
+  return ["case", [">", ["coalesce", ["feature-state", "travel"], SENTINEL], cut], 1, 0];
+}
+
 function drawBudget(spineCut, fogCut = spineCut) {
   if (spineReady && spineMap.getLayer("journey-metro")) {
     const within = ["<=", ["get", "travel"], spineCut];
@@ -292,22 +328,16 @@ function drawBudget(spineCut, fogCut = spineCut) {
   // (left in colour) — instant filter on the mask map.
   fogCutoff = fogCut;
   if (maskReady && maskMap.getLayer("veil")) {
-    maskMap.setFilter("veil", [">", ["get", "travel"], fogCut]);
+    // instant: re-evaluates the opacity expression over existing feature-state on
+    // the GPU — no data re-upload (this is what makes the budget slider free).
+    maskMap.setPaintProperty("veil", "fill-opacity", veilOpacity(fogCut));
   }
 }
 
-// Push the full hex grid to the mask map. Geometry is fixed; only each cell's
-// `travel` property changes (sentinel = stays desaturated, real value = revealed
-// in colour when within budget via the drawBudget filter).
-function renderVeil() {
-  if (!maskReady || !maskMap.getSource("veil") || !veilFeatures) return;
-  maskMap.getSource("veil").setData({ type: "FeatureCollection", features: veilFeatures });
-}
-
-// reset every cell back to grey (sentinel) before a new query streams in
+// reset every cell back to grey before a new query: drop all reveal state in a
+// single call (geometry stays uploaded; cells re-reveal as the new fog streams).
 function clearReach() {
-  if (!veilFeatures) return;
-  for (const f of veilFeatures) f.properties.travel = SENTINEL;
+  if (maskReady && maskMap.getSource("veil")) maskMap.removeFeatureState({ source: "veil" });
 }
 
 // --- fetch (only on origin / departure / mode change) ---
@@ -320,8 +350,7 @@ async function fetchIsochrone() {
   if (inflight) inflight.abort();
   inflight = new AbortController();
   const sig = inflight.signal;
-  clearReach();
-  renderVeil();                // whole bbox greys out; reachable cells reveal as they stream
+  clearReach();                // whole bbox greys out; reachable cells reveal as they stream
   try {
     const t0 = performance.now();
     const data = await (await fetch(`/api/isochrone?${params}`, { signal: sig })).json();
@@ -353,7 +382,6 @@ function renderSpine(data) {
 
 // stream the fog hexagons (NDJSON [travel,q,r]); the reveal opens as they arrive
 async function streamFog(params, sig) {
-  let lastVeil = 0;
   try {
     const resp = await fetch(`/api/fog?${params}`, { signal: sig });
     const reader = resp.body.getReader();
@@ -366,13 +394,13 @@ async function streamFog(params, sig) {
       let nl;
       while ((nl = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-        if (!line) continue;
+        if (!line || sig.aborted) continue;
         const c = JSON.parse(line);     // [travel, q, r]
         const idx = idxByKey.get(c[1] + "," + c[2]);
-        if (idx !== undefined) veilFeatures[idx].properties.travel = c[0];
+        // cheap per-cell reveal — no geometry re-upload; MapLibre coalesces the
+        // re-render so each streamed chunk repaints at most once.
+        if (idx !== undefined) maskMap.setFeatureState({ source: "veil", id: idx }, { travel: c[0] });
       }
-      if (!sig.aborted && performance.now() - lastVeil > 200) { renderVeil(); lastVeil = performance.now(); }
     }
-    if (!sig.aborted) renderVeil();
   } catch (e) { /* aborted or no fog */ }
 }
