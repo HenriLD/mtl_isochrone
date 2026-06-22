@@ -56,7 +56,10 @@ class WalkGraph:
         return len(self.node_lon)
 
     def build_csr(self) -> None:
-        """Flatten `adj` into packed CSR arrays. Idempotent; safe on old pickles."""
+        """Flatten `adj` into packed CSR arrays. Idempotent: a no-op if CSR is
+        already present (e.g. a pickle that shipped baked CSR with `adj` dropped)."""
+        if self.csr_off is not None:
+            return
         n = len(self.node_lon)
         adj = self.adj
         off = array('i', bytes(4 * (n + 1)))

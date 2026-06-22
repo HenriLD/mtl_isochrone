@@ -1,26 +1,62 @@
-"""Thin FastAPI dev server around the RAPTOR engine.
+"""Thin Starlette server around the RAPTOR engine.
 
-Loads the compiled network once at startup, exposes a single /api/isochrone
-endpoint, and serves the static MapLibre frontend. Deliberately stateless and
-dependency-light so it can later move to a free backend tier unchanged.
+Loads the compiled network once at startup, exposes the /api/* endpoints, and
+serves the static MapLibre frontend. Deliberately stateless and dependency-light.
 
-Run:  python -m uvicorn server.app:app --reload   (from the repo root)
+Why Starlette (not FastAPI): the only third-party pieces are Starlette + uvicorn,
+both pure-Python, so the whole stack runs unchanged on **PyPy** (FastAPI drags in
+pydantic-core, a Rust extension whose PyPy wheels are unreliable). The engine
+itself is pure stdlib. This keeps the free Hugging Face Space image on
+`pypy:3.10-slim` for the ~5-10x JIT speedup with no compiled dependencies.
+
+Run:  python -m uvicorn server.app:app --port 8077      (CPython, local dev)
+      pypy3 -m uvicorn server.app:app --host 0.0.0.0 --port 7860   (Space)
 """
 from __future__ import annotations
 
+import os
 import pickle
 import threading
+import time
 from collections import OrderedDict
 
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from config import MAX_BUDGET_MIN, NETWORK_FILE, ROOT, WALK_GRAPH_FILE
 from engine.raptor import ROUTE_TYPE_MODE, SPINE_TYPES, compute_isochrone, prepare_network
 from engine.walk import egress_hex_disc, egress_hex_graph
 
-app = FastAPI(title="Montreal Isochrone")
+
+def _ensure_data() -> None:
+    """Fetch the compiled pickles from a Hugging Face Dataset (the free "bucket")
+    on first boot if they're not already on disk. No-op locally, where the build
+    scripts have written them. Configure with env vars on the Space:
+        HF_DATA_REPO = "user/mtl-isochrone-data"   (a dataset repo)
+        HF_TOKEN     = <read token>                (only if the dataset is private)
+    If the data is instead mounted via persistent storage, point NETWORK_FILE /
+    WALK_GRAPH_FILE there (they already honour an absolute path) and skip this."""
+    if NETWORK_FILE.exists() and WALK_GRAPH_FILE.exists():
+        return
+    repo = os.environ.get("HF_DATA_REPO")
+    if not repo:
+        return
+    import shutil
+
+    from huggingface_hub import hf_hub_download
+    token = os.environ.get("HF_TOKEN")
+    NETWORK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    for filename, dest in (("network.pkl", NETWORK_FILE), ("walk_graph.pkl", WALK_GRAPH_FILE)):
+        print(f"Fetching {filename} from dataset {repo}...")
+        cached = hf_hub_download(repo_id=repo, filename=filename, repo_type="dataset", token=token)
+        shutil.copy(cached, dest)
+
+
+_ensure_data()
 
 with open(NETWORK_FILE, "rb") as f:
     NET = pickle.load(f)
@@ -31,9 +67,9 @@ WALK = None
 if WALK_GRAPH_FILE.exists():
     with open(WALK_GRAPH_FILE, "rb") as f:
         WALK = pickle.load(f)
-    # Build the packed CSR adjacency once, then drop the bulky tuple `adj` — the
-    # request path routes exclusively through CSR Dijkstra, so this cuts resident
-    # memory sharply (helps the eventual cheap host) and warms the first query.
+    # Pickles built by build_walk_graph.py already ship CSR with `adj` dropped.
+    # These calls are no-ops then; they only kick in (and free memory) for an
+    # older pickle that still carries the tuple adjacency.
     WALK.build_csr()
     WALK.free_adj()
     print(f"Loaded walk graph: {WALK.n_nodes} nodes (street-network access enabled, CSR)")
@@ -60,10 +96,10 @@ _iso_lock = threading.Lock()
 _ISO_CACHE_MAX = 8
 
 
-def get_iso(lat: float, lon: float, time: str, modes: str):
+def get_iso(lat: float, lon: float, time_str: str, modes: str):
     allowed = {m.strip() for m in modes.split(",") if m.strip()} & ALL_MODES or ALL_MODES
-    dep = _parse_time(time)
-    key = (round(lat, 6), round(lon, 6), time, ",".join(sorted(allowed)))
+    dep = _parse_time(time_str)
+    key = (round(lat, 6), round(lon, 6), time_str, ",".join(sorted(allowed)))
     with _iso_lock:
         if key in _iso_cache:
             _iso_cache.move_to_end(key)
@@ -89,20 +125,35 @@ def get_iso(lat: float, lon: float, time: str, modes: str):
     return result, dep
 
 
-@app.get("/api/meta")
-def meta() -> dict:
-    return {
+def _query(request, name: str, default=None):
+    return request.query_params.get(name, default)
+
+
+def _origin(request):
+    """Parse required lat/lon plus optional time/modes; returns a 400 JSONResponse
+    on bad input (else a 4-tuple)."""
+    try:
+        lat = float(request.query_params["lat"])
+        lon = float(request.query_params["lon"])
+    except (KeyError, ValueError):
+        return JSONResponse({"error": "lat and lon are required floats"}, status_code=400)
+    time_str = _query(request, "time", "08:00")
+    modes = _query(request, "modes", "metro,bus,rail,tram")
+    return lat, lon, time_str, modes
+
+
+async def meta(request) -> JSONResponse:
+    return JSONResponse({
         "service_date": NET.service_date,
         "feeds": NET.feeds,
         "n_stops": NET.n_stops,
         "modes": sorted(ALL_MODES),
         "max_budget_min": MAX_BUDGET_MIN,
         "center": [45.5152, -73.5616],
-    }
+    })
 
 
-@app.get("/api/lines")
-def lines() -> JSONResponse:
+async def lines(request) -> JSONResponse:
     """The distinct rapid-transit "spine" lines (metro / REM / exo trains) with
     their official colours, for the legend. Buses are intentionally excluded —
     they're consolidated into one colour on the map. Deduped by route_id; the
@@ -123,19 +174,17 @@ def lines() -> JSONResponse:
     return JSONResponse({"lines": out})
 
 
-@app.get("/api/isochrone")
-def isochrone(
-    lat: float = Query(...),
-    lon: float = Query(...),
-    time: str = Query("08:00"),
-    modes: str = Query("metro,bus,rail,tram"),
-) -> JSONResponse:
+async def isochrone(request) -> JSONResponse:
     """Compute once at the max budget. Every stop/segment carries `travel`
     (seconds from departure), so the client filters any smaller budget locally."""
-    result, dep = get_iso(lat, lon, time, modes)
+    parsed = _origin(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    lat, lon, time_str, modes = parsed
+    result, dep = get_iso(lat, lon, time_str, modes)
     return JSONResponse({
         "origin": [lat, lon],
-        "departure": time,
+        "departure": time_str,
         "max_budget_min": MAX_BUDGET_MIN,
         "service_date": NET.service_date,
         "count": len(result.stops),
@@ -143,22 +192,21 @@ def isochrone(
     })
 
 
-@app.get("/api/fog")
-def fog(
-    lat: float = Query(...),
-    lon: float = Query(...),
-    time: str = Query("08:00"),
-    modes: str = Query("metro,bus,rail,tram"),
-) -> StreamingResponse:
+async def fog(request) -> StreamingResponse:
     """Reachable walk-area hexes as NDJSON [travel, q, r], streamed in increasing
     travel order (near->far reveal). Only reachable cells are sent — the client
     paints an opaque grey hex grid over the whole bbox itself and reveals these
     cells via the budget filter, so the unreachable zone (incl. water) is fully
     greyscale without us streaming every grey cell."""
+    parsed = _origin(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    lat, lon, time_str, modes = parsed
+
     def generate():
         if WALK is None:
             return
-        result, dep = get_iso(lat, lon, time, modes)
+        result, dep = get_iso(lat, lon, time_str, modes)
         cutoff = dep + MAX_BUDGET_MIN * 60
         seen: set = set()
         on_graph = [(WALK.stop_hex[r.stop_index], r.arrival)
@@ -180,5 +228,35 @@ def fog(
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
-# static frontend (mounted last so /api/* wins)
-app.mount("/", StaticFiles(directory=str(ROOT / "web"), html=True), name="web")
+def _warm_up() -> None:
+    """Prime the hop-geometry cache (and, on PyPy, trigger JIT compilation of the
+    hot path) with one synthetic downtown query, so the first real user click is
+    hot rather than paying cold-cache / interpreter tax."""
+    t = time.perf_counter()
+    try:
+        compute_isochrone(NET, 45.5017, -73.5673, _parse_time("08:00"),
+                          MAX_BUDGET_MIN * 60, allowed_modes=ALL_MODES, walk_graph=WALK)
+        print(f"Warm-up query done in {(time.perf_counter() - t) * 1000:.0f} ms")
+    except Exception as e:                       # never let warm-up block serving
+        print(f"Warm-up skipped: {e}")
+
+
+_warm_up()
+
+routes = [
+    Route("/api/meta", meta),
+    Route("/api/lines", lines),
+    Route("/api/isochrone", isochrone),
+    Route("/api/fog", fog),
+    # static frontend (mounted last so /api/* wins)
+    Mount("/", app=StaticFiles(directory=str(ROOT / "web"), html=True), name="web"),
+]
+
+# GZip the JSON responses (the ~1 MB spine compresses ~5-8x); the fog NDJSON
+# stream is compressed chunk-by-chunk, so the near->far reveal is preserved.
+app = Starlette(routes=routes, middleware=[Middleware(GZipMiddleware, minimum_size=500)])
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "7860")))

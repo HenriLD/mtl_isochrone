@@ -1,3 +1,15 @@
+<!-- Hugging Face Space metadata (ignored on GitHub). Required by HF to build a
+     Docker Space; app_port must match the EXPOSE/uvicorn port in the Dockerfile. -->
+---
+title: Montreal Transit Isochrone
+emoji: 🚇
+colorFrom: indigo
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Montreal Multi-Modal Isochrone Map
 
 Pick a starting point on a map of Montreal, set a departure time and a time

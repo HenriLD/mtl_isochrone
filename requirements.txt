@@ -1,7 +1,7 @@
-# Phase 1 keeps dependencies deliberately minimal so the engine stays
-# lightweight and portable (no pandas / osmnx / numpy required for the core).
-#
-# Ingestion + engine: pure standard library (zipfile, csv, bisect, array).
-# Only the dev API server pulls in third-party packages:
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
+# Ingestion + engine: pure standard library (zipfile, csv, bisect, array) — no
+# third-party packages. Only the API server pulls in dependencies, and they are
+# all pure-Python so the whole stack runs on PyPy (pypy:3.10-slim) for the JIT
+# speedup with no compiled wheels:
+starlette==0.41.3          # routing / responses / gzip (FastAPI minus pydantic-core)
+uvicorn==0.34.0            # ASGI server (base, not [standard]: no uvloop/httptools C deps)
+huggingface_hub>=0.25      # fetch the compiled pickles from the data bucket on boot

@@ -1,0 +1,19 @@
+# Keep the build context small and the image lean. Data is fetched at boot from
+# the HF dataset bucket (HF_DATA_REPO), not baked into the image.
+.git
+.claude
+__pycache__
+**/__pycache__
+*.pyc
+.venv
+venv
+
+# large / regenerable data (pulled at runtime)
+data/raw/*.zip
+data/raw/osm_walk.json
+data/processed/
+
+node_modules
+.DS_Store
+.vscode
+.idea
