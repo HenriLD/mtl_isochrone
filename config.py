@@ -13,21 +13,54 @@ DATA_RAW = ROOT / "data" / "raw"
 
 
 def _resolve_processed() -> Path:
-    """Where the compiled pickles (network.pkl / walk_graph.pkl) live.
+    """Directory holding the compiled pickles (network.pkl / walk_graph.pkl).
 
-    On a Hugging Face Space the persistent-storage bucket is mounted at /data, so
-    prefer whichever location actually holds the data: an explicit MTL_DATA_DIR,
-    then the /data bucket, then the in-repo path used for local dev and builds."""
+    On a Hugging Face Space a Storage Bucket is mounted at a configurable path
+    (default /data here), and files appear at <mount>/<their key in the bucket> —
+    so if the pickles were synced under a prefix (e.g. data/processed/), they land
+    at /data/data/processed/, not /data/. To be robust to however they were
+    uploaded, we (1) try explicit/known roots directly, then (2) search a mounted
+    root for network.pkl and use whatever directory actually contains it.
+
+    Override the search with MTL_DATA_DIR (point it straight at the right dir,
+    e.g. /data/data/processed) — no redeploy needed, just restart the Space."""
     local = ROOT / "data" / "processed"
-    candidates = []
+    roots = []
     if os.environ.get("MTL_DATA_DIR"):
-        candidates.append(Path(os.environ["MTL_DATA_DIR"]))
-    candidates.append(Path("/data"))
-    candidates.append(local)
-    for d in candidates:
+        roots.append(Path(os.environ["MTL_DATA_DIR"]))
+    roots.append(Path("/data"))            # HF bucket default mount in this app
+    roots.append(local)
+    # 1) direct hit: <root>/network.pkl
+    for d in roots:
         if (d / "network.pkl").exists():
             return d
+    # 2) the file may sit under a prefix inside a mounted bucket — find it
+    for d in roots:
+        if d.is_dir():
+            try:
+                hit = next(d.rglob("network.pkl"), None)
+            except OSError:
+                hit = None
+            if hit is not None:
+                return hit.parent
     return local            # first build writes here; server fails loudly if empty
+
+
+def describe_data_resolution() -> str:
+    """Human-readable diagnostic of where we looked and what we found — logged at
+    startup so a mount/prefix mismatch is obvious in the Space runtime logs."""
+    lines = [f"DATA_PROCESSED resolved to: {DATA_PROCESSED}",
+             f"network.pkl present: {NETWORK_FILE.exists()}"]
+    for probe in (os.environ.get("MTL_DATA_DIR"), "/data"):
+        if probe and Path(probe).is_dir():
+            try:
+                entries = sorted(p.name + ("/" if p.is_dir() else "") for p in Path(probe).iterdir())
+            except OSError as e:
+                entries = [f"<unreadable: {e}>"]
+            lines.append(f"contents of {probe}: {entries[:50]}")
+        elif probe:
+            lines.append(f"{probe} is not a directory (not mounted?)")
+    return "\n".join(lines)
 
 
 DATA_PROCESSED = _resolve_processed()

@@ -58,6 +58,15 @@ def _ensure_data() -> None:
 
 _ensure_data()
 
+import config as _config
+print(_config.describe_data_resolution())
+if not NETWORK_FILE.exists():
+    raise SystemExit(
+        f"network.pkl not found at {NETWORK_FILE}. If running on a HF Space, check "
+        "that the Storage Bucket is mounted and that the pickles are inside it; set "
+        "MTL_DATA_DIR to the directory that actually contains network.pkl (see the "
+        "'contents of /data' listing above), then restart the Space.")
+
 with open(NETWORK_FILE, "rb") as f:
     NET = pickle.load(f)
 prepare_network(NET)            # build per-route bisect columns + hop-geometry cache up front
