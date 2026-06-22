@@ -33,13 +33,13 @@ from engine.walk import egress_hex_disc, egress_hex_graph
 
 
 def _ensure_data() -> None:
-    """Fetch the compiled pickles from a Hugging Face Dataset (the free "bucket")
-    on first boot if they're not already on disk. No-op locally, where the build
-    scripts have written them. Configure with env vars on the Space:
+    """Optional fallback: fetch the compiled pickles from a Hugging Face Dataset
+    if they're not already on disk. Normally a no-op — on the Space the pickles
+    live in the persistent-storage bucket at /data (auto-detected by config), and
+    locally the build scripts have written them. Only used if neither is present
+    AND these env vars are set:
         HF_DATA_REPO = "user/mtl-isochrone-data"   (a dataset repo)
-        HF_TOKEN     = <read token>                (only if the dataset is private)
-    If the data is instead mounted via persistent storage, point NETWORK_FILE /
-    WALK_GRAPH_FILE there (they already honour an absolute path) and skip this."""
+        HF_TOKEN     = <read token>                (only if the dataset is private)"""
     if NETWORK_FILE.exists() and WALK_GRAPH_FILE.exists():
         return
     repo = os.environ.get("HF_DATA_REPO")

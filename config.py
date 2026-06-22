@@ -5,11 +5,32 @@ Adding a transit agency later (e.g. REM, exo) is just another entry in
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DATA_RAW = ROOT / "data" / "raw"
-DATA_PROCESSED = ROOT / "data" / "processed"
+
+
+def _resolve_processed() -> Path:
+    """Where the compiled pickles (network.pkl / walk_graph.pkl) live.
+
+    On a Hugging Face Space the persistent-storage bucket is mounted at /data, so
+    prefer whichever location actually holds the data: an explicit MTL_DATA_DIR,
+    then the /data bucket, then the in-repo path used for local dev and builds."""
+    local = ROOT / "data" / "processed"
+    candidates = []
+    if os.environ.get("MTL_DATA_DIR"):
+        candidates.append(Path(os.environ["MTL_DATA_DIR"]))
+    candidates.append(Path("/data"))
+    candidates.append(local)
+    for d in candidates:
+        if (d / "network.pkl").exists():
+            return d
+    return local            # first build writes here; server fails loudly if empty
+
+
+DATA_PROCESSED = _resolve_processed()
 NETWORK_FILE = DATA_PROCESSED / "network.pkl"
 WALK_GRAPH_FILE = DATA_PROCESSED / "walk_graph.pkl"
 OSM_RAW_FILE = DATA_RAW / "osm_walk.json"
