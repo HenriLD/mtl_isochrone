@@ -1,5 +1,3 @@
-<!-- Hugging Face Space metadata (ignored on GitHub). Required by HF to build a
-     Docker Space; app_port must match the EXPOSE/uvicorn port in the Dockerfile. -->
 ---
 title: Montreal Transit Isochrone
 emoji: 🚇
@@ -9,6 +7,9 @@ sdk: docker
 app_port: 7860
 pinned: false
 ---
+
+<!-- The YAML block above is Hugging Face Space metadata (it must be the very
+     first bytes of this file). app_port must match the Dockerfile EXPOSE/port. -->
 
 # Montreal Multi-Modal Isochrone Map
 
