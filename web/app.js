@@ -422,13 +422,19 @@ async function fetchIsochrone() {
   inflight = new AbortController();
   const sig = inflight.signal;
   clearReach();                // whole bbox greys out; reachable cells reveal as they stream
+  // Fire fog IN PARALLEL with the spine (not after it). The single-flight cache
+  // still runs RAPTOR once — whichever request lands first computes, the other
+  // waits on its Event — but the fog's ~115 ms proxy round-trip now overlaps the
+  // spine's compute instead of starting only after the spine response, so the
+  // reveal fills in ~200 ms sooner. (Safe now that the cache coordinates them;
+  // the old "parallel is slower" was pre-cache GIL contention from double compute.)
+  streamFog(params, sig);
   try {
     const t0 = performance.now();
     const data = await (await fetch(`/api/isochrone?${params}`, { signal: sig })).json();
     renderSpine(data);
     setStatus("result", { n: data.count, m: data.max_budget_min, ms: Math.round(performance.now() - t0) });
     drawBudget(state.budget * 60);
-    streamFog(params, sig);    // reuses the spine's cached RAPTOR (single-flight)
   } catch (err) {
     if (err.name !== "AbortError") setStatus("queryErr");
   }

@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Montreal Isochrone</title>
+  <!-- warm DNS/TLS to the basemap tile host so tiles (initial + on pan) start sooner -->
+  <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin />
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <style>
@@ -153,6 +155,6 @@
       <div class="key"><span class="zone"></span> <span data-i18n="reachKey">Colour = reachable · grey = out of reach</span></div>
     </div>
   </div>
-  <script src="app.js?v=28"></script>
+  <script src="app.js?v=29"></script>
 </body>
 </html>

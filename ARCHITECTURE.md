@@ -61,7 +61,10 @@ A click fires **two** requests for the same origin; both go through `get_iso`
 2. `GET /api/fog` → reuses the cached `result` → `egress_hex_graph` +
    `egress_hex_disc` → NDJSON stream of reachable hexes `[travel, q, r]`.
 
-The client fetches spine **then** fog (sequential — see [GIL note](#what-was-already-optimized)).
+The client fires **both requests in parallel**; the single-flight cache runs
+RAPTOR once (one request computes, the other waits on its `Event`), so the fog's
+proxy round-trip overlaps the spine's compute and the reveal fills in ~200 ms
+sooner. (Parallel is safe *because* of the cache — see the GIL note below.)
 
 **The budget slider never hits the server.** Earliest-arrival times are
 budget-independent, so the server computes once at `MAX_BUDGET_MIN` (90) and tags
@@ -125,8 +128,10 @@ print('avg ms', (time.perf_counter()-t)/5*1000)"
   filter makes the budget slider free.
 - **Single-flight RAPTOR cache** (`get_iso`, `threading.Event`) — spine + fog
   share one RAPTOR run; repeat clicks are instant.
-- **Sequential, not parallel (GIL)** — racing spine+fog in parallel was *slower*;
-  the client fetches spine then fog. (PyPy still has a GIL — don't "add threads".)
+- **Single-flight is what makes parallel safe (GIL)** — racing spine+fog was
+  *slower* only when both **recomputed** RAPTOR (GIL contention). With the cache,
+  only one computes and the other waits, so the client now fires both in parallel
+  to overlap the proxy round-trips. Don't remove the cache and "add threads".
 - **Compact wire formats** — fog `[travel,q,r]`; segments
   `[travel,code,color,coords]`, 5-decimal, Douglas-Peucker-simplified. Both
   **gzipped** by the server (spine ~655 KB → ~147 KB).

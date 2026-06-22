@@ -228,7 +228,7 @@ def fog(request) -> StreamingResponse:
                     egress_hex_disc(off_graph, cutoff, dep, seen=seen)):
             for travel, (q, r) in gen:
                 buf.append(f"[{travel},{q},{r}]")
-                if len(buf) >= 512:
+                if len(buf) >= 192:        # smaller batches => the near hexes reveal sooner
                     yield "\n".join(buf) + "\n"
                     buf = []
         if buf:
