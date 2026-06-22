@@ -9,6 +9,7 @@ backend tier or to the browser (Pyodide/WASM) later without changes.
 from __future__ import annotations
 
 import math
+import threading
 from array import array
 from bisect import bisect_left
 from dataclasses import dataclass
@@ -16,6 +17,20 @@ from dataclasses import dataclass
 from config import MAX_ACCESS_WALK_MIN, WALK_SNAP_MAX_M, WALK_SPEED_MPS
 from engine.model import Network, haversine_m
 from engine.walk import WalkGraph, _Scratch, dijkstra
+
+# Per-thread reusable Dijkstra scratch. A fresh _Scratch allocates two
+# n_nodes-long lists (~1.5M each) every access query; reusing one (reset via its
+# dirty-list, which dijkstra already does) removes ~24 MB of per-query garbage —
+# the churn that triggers PyPy GC pauses / latency spikes. Thread-local so it's
+# safe under Starlette's sync-endpoint threadpool (concurrent queries).
+_scratch_tls = threading.local()
+
+
+def _scratch_for(n: int) -> _Scratch:
+    s = getattr(_scratch_tls, "s", None)
+    if s is None or len(s.dist) != n:
+        s = _scratch_tls.s = _Scratch(n)
+    return s
 
 INF = 10 ** 12
 MAX_ROUNDS = 8  # max boardings considered (rounds converge well before this)
@@ -102,7 +117,7 @@ def _access_walk(wg: WalkGraph, lon: float, lat: float, max_sec: float):
         return []
     if haversine_m(lat, lon, wg.node_lat[src], wg.node_lon[src]) > WALK_SNAP_MAX_M:
         return []
-    scratch = _Scratch(wg.n_nodes)
+    scratch = _scratch_for(wg.n_nodes)
     dijkstra(wg, src, int(max_sec), scratch)
     # time to walk from the exact origin onto the snapped node
     base = haversine_m(lat, lon, wg.node_lat[src], wg.node_lon[src]) / WALK_SPEED_MPS

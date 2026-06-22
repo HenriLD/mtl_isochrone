@@ -151,7 +151,7 @@ def _origin(request):
     return lat, lon, time_str, modes
 
 
-async def meta(request) -> JSONResponse:
+def meta(request) -> JSONResponse:
     return JSONResponse({
         "service_date": NET.service_date,
         "feeds": NET.feeds,
@@ -162,7 +162,7 @@ async def meta(request) -> JSONResponse:
     })
 
 
-async def lines(request) -> JSONResponse:
+def lines(request) -> JSONResponse:
     """The distinct rapid-transit "spine" lines (metro / REM / exo trains) with
     their official colours, for the legend. Buses are intentionally excluded —
     they're consolidated into one colour on the map. Deduped by route_id; the
@@ -183,7 +183,7 @@ async def lines(request) -> JSONResponse:
     return JSONResponse({"lines": out})
 
 
-async def isochrone(request) -> JSONResponse:
+def isochrone(request) -> JSONResponse:
     """Compute once at the max budget. Every stop/segment carries `travel`
     (seconds from departure), so the client filters any smaller budget locally."""
     parsed = _origin(request)
@@ -201,7 +201,7 @@ async def isochrone(request) -> JSONResponse:
     })
 
 
-async def fog(request) -> StreamingResponse:
+def fog(request) -> StreamingResponse:
     """Reachable walk-area hexes as NDJSON [travel, q, r], streamed in increasing
     travel order (near->far reveal). Only reachable cells are sent — the client
     paints an opaque grey hex grid over the whole bbox itself and reveals these
