@@ -146,6 +146,75 @@ const $ = (id) => document.getElementById(id);
 const budgetEl = $("budget"), statusEl = $("status"), timeEl = $("time");
 const fmtTime = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 
+// --- i18n: fully bilingual UI, French by default (Québec). Static text carries
+// data-i18n keys (translated in applyLang); dynamic strings (status, legend) read
+// the active language at render time. EXO line names + "Montréal Isochrone" are
+// proper nouns, kept as-is. Choice persists in localStorage. ---
+const I18N = {
+  fr: {
+    hint: "Cliquez n'importe où pour déposer un point de départ — la carte s'illumine en couleur partout où vous pouvez vous rendre en transport collectif dans le temps imparti.",
+    departAt: "Départ à", timeBudget: "Temps de trajet",
+    dragScroll: "glissez ou défilez — mise à jour instantanée",
+    modes: "Modes", modeMetro: "Métro", modeBus: "Bus", modeRail: "REM / Train",
+    legendHead: "Légende", reachKey: "Couleur = accessible · gris = hors d'atteinte",
+    grpReach: "Accessibilité", grpMetro: "Métro", grpRem: "REM", grpTrain: "Train · exo", grpBus: "Bus",
+    remLabel: "REM (train léger)", allBus: "Tous les circuits d'autobus", linePrefix: "Ligne ",
+    metro: { "1": "Ligne verte", "2": "Ligne orange", "4": "Ligne jaune", "5": "Ligne bleue" },
+    loading: "Chargement du réseau…",
+    ready: (d) => `Prêt · date de service ${d}. Cliquez sur la carte pour commencer.`,
+    computing: "Calcul en cours…",
+    result: (n, m, ms) => `${n} arrêts accessibles en ${m} min ou moins · ${ms} ms`,
+    apiErr: "Impossible de joindre l'API. Le serveur est-il démarré ?",
+    queryErr: "Échec de la requête.",
+  },
+  en: {
+    hint: "Click anywhere to drop a start point — the map lights up in colour wherever you can travel by transit within the budget.",
+    departAt: "Depart at", timeBudget: "Time budget",
+    dragScroll: "drag or scroll — updates instantly",
+    modes: "Modes", modeMetro: "Metro", modeBus: "Bus", modeRail: "REM / Train",
+    legendHead: "Legend", reachKey: "Colour = reachable · grey = out of reach",
+    grpReach: "Reachability", grpMetro: "Métro", grpRem: "REM", grpTrain: "Train · exo", grpBus: "Bus",
+    remLabel: "REM (light rail)", allBus: "All bus routes", linePrefix: "Line ",
+    metro: { "1": "Green Line", "2": "Orange Line", "4": "Yellow Line", "5": "Blue Line" },
+    loading: "Loading network…",
+    ready: (d) => `Ready · service date ${d}. Click the map to start.`,
+    computing: "Computing…",
+    result: (n, m, ms) => `${n} stops reachable within ${m} min · ${ms} ms`,
+    apiErr: "Could not reach API. Is the server running?",
+    queryErr: "Query failed.",
+  },
+};
+let lang = localStorage.getItem("lang") === "en" ? "en" : "fr";   // FR default (QC)
+const t = (k) => I18N[lang][k];
+
+// status is contextual, so we keep its state and re-render it on language change
+let statusState = { kind: "loading" };
+function renderStatus() {
+  const s = statusState, d = I18N[lang];
+  statusEl.textContent =
+    s.kind === "ready" ? d.ready(s.date) :
+    s.kind === "result" ? d.result(s.n, s.m, s.ms) :
+    s.kind === "computing" ? d.computing :
+    s.kind === "apiErr" ? d.apiErr :
+    s.kind === "queryErr" ? d.queryErr : d.loading;
+}
+function setStatus(kind, extra) { statusState = Object.assign({ kind }, extra); renderStatus(); }
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("#lang button").forEach((b) => b.classList.toggle("on", b.dataset.lang === lang));
+  renderStatus();
+  renderLegend();
+}
+$("lang").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  lang = b.dataset.lang;
+  localStorage.setItem("lang", lang);
+  applyLang();
+});
+
 // --- controls ---
 // paint the filled portion of a range input (native fill isn't stylable)
 function paintRange(el) {
@@ -270,38 +339,40 @@ spineMap.on("load", () => {
 map.on("load", async () => {
   try {
     const meta = await (await fetch("/api/meta")).json();
-    statusEl.textContent = `Ready · service date ${meta.service_date}. Click the map to start.`;
-  } catch { statusEl.textContent = "Could not reach API. Is the server running?"; }
+    setStatus("ready", { date: meta.service_date });
+  } catch { setStatus("apiErr"); }
   ready = true;
   drawBudget(state.budget * 60);
-  buildLegend();
+  fetchLegend();
 });
 
 // --- legend: the actual rapid-transit lines in the network (from /api/lines),
 // grouped Métro / REM / Train; buses are one consolidated colour. ---
-const METRO_LABEL = { "1": "Green Line", "2": "Orange Line", "4": "Yellow Line", "5": "Blue Line" };
+// exo train names are proper nouns — same in both languages
 const EXO_LABEL = { MA: "Mascouche", SH: "Mont-Saint-Hilaire", VH: "Vaudreuil–Hudson",
   SJ: "Saint-Jérôme", CA: "Candiac", DM: "Deux-Montagnes" };
-async function buildLegend() {
+let legendLines = null;                          // cached /api/lines payload (re-rendered on language change)
+async function fetchLegend() {
+  try { legendLines = (await (await fetch("/api/lines")).json()).lines || []; } catch { return; }
+  renderLegend();
+}
+function renderLegend() {
   const legend = $("legend");
-  if (!legend) return;
-  let lines = [];
-  try { lines = (await (await fetch("/api/lines")).json()).lines || []; } catch { return; }
+  if (!legend || !legendLines) return;           // localized placeholder stays until lines load
   const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const bar = (color) => `<span class="bar" style="background:#${esc(color)}"></span>`;
   const key = (sw, label) => `<div class="key">${sw}<span>${esc(label)}</span></div>`;
-  const group = (head, rows) => rows ? `<div class="group"><div class="ghead">${head}</div>${rows}</div>` : "";
+  const group = (head, rows) => rows ? `<div class="group"><div class="ghead">${esc(head)}</div>${rows}</div>` : "";
+  const metroLabel = t("metro");
+  const metro = legendLines.filter((l) => l.type === 1);
+  const rem = legendLines.filter((l) => l.type === 0);
+  const train = legendLines.filter((l) => l.type === 2);
 
-  const metro = lines.filter((l) => l.type === 1);
-  const rem = lines.filter((l) => l.type === 0);
-  const train = lines.filter((l) => l.type === 2);
-
-  let html = group("Reachability",
-    key(`<span class="zone"></span>`, "Colour = reachable · grey = out of reach"));
-  html += group("Métro", metro.map((l) => key(bar(l.color), METRO_LABEL[l.name] || "Line " + l.name)).join(""));
-  if (rem.length) html += group("REM", key(bar(rem[0].color), "REM (light rail)"));
-  html += group("Train · exo", train.map((l) => key(bar(l.color), EXO_LABEL[l.name] || l.name)).join(""));
-  html += group("Bus", key(`<span class="bar bus" style="background:${BUS_COLOR}"></span>`, "All bus routes"));
+  let html = group(t("grpReach"), key(`<span class="zone"></span>`, t("reachKey")));
+  html += group(t("grpMetro"), metro.map((l) => key(bar(l.color), metroLabel[l.name] || (t("linePrefix") + l.name))).join(""));
+  if (rem.length) html += group(t("grpRem"), key(bar(rem[0].color), t("remLabel")));
+  html += group(t("grpTrain"), train.map((l) => key(bar(l.color), EXO_LABEL[l.name] || l.name)).join(""));
+  html += group(t("grpBus"), key(`<span class="bar bus" style="background:${BUS_COLOR}"></span>`, t("allBus")));
   legend.innerHTML = html;
 }
 
@@ -346,7 +417,7 @@ async function fetchIsochrone() {
   if (!state.origin) return;
   const [lon, lat] = state.origin;
   const params = new URLSearchParams({ lat, lon, time: state.time, modes: [...state.modes].join(",") });
-  statusEl.textContent = "Computing…";
+  setStatus("computing");
   if (inflight) inflight.abort();
   inflight = new AbortController();
   const sig = inflight.signal;
@@ -355,11 +426,11 @@ async function fetchIsochrone() {
     const t0 = performance.now();
     const data = await (await fetch(`/api/isochrone?${params}`, { signal: sig })).json();
     renderSpine(data);
-    statusEl.textContent = `${data.count} stops reachable within ${data.max_budget_min} min · ${Math.round(performance.now() - t0)} ms`;
+    setStatus("result", { n: data.count, m: data.max_budget_min, ms: Math.round(performance.now() - t0) });
     drawBudget(state.budget * 60);
     streamFog(params, sig);    // reuses the spine's cached RAPTOR (single-flight)
   } catch (err) {
-    if (err.name !== "AbortError") statusEl.textContent = "Query failed.";
+    if (err.name !== "AbortError") setStatus("queryErr");
   }
 }
 
@@ -404,3 +475,7 @@ async function streamFog(params, sig) {
     }
   } catch (e) { /* aborted or no fog */ }
 }
+
+// apply the saved/default language now that every translatable element + the
+// dynamic renderers (status, legend) are defined.
+applyLang();

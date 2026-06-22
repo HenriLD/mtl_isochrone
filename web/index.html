@@ -46,6 +46,14 @@
     .phead { display: flex; align-items: center; gap: 9px; margin-bottom: 4px;
       font-size: 15.5px; font-weight: 750; letter-spacing: -0.015em; }
     .phead svg { flex: none; }
+    /* FR / EN language toggle (pushed to the right of the header) */
+    .lang { margin-left: auto; display: flex; gap: 2px; padding: 2px;
+      background: var(--track); border-radius: 8px; }
+    .lang button { border: none; background: transparent; color: var(--ink-soft);
+      font: inherit; font-size: 10.5px; font-weight: 750; letter-spacing: .03em;
+      padding: 3px 8px; border-radius: 6px; cursor: pointer; transition: background .15s, color .15s; }
+    .lang button:hover { color: var(--accent); }
+    .lang button.on { background: #fff; color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.14); }
     .hint { color: var(--ink-soft); font-size: 11.5px; line-height: 1.45; margin: 0 0 15px; }
     .ctl { margin: 14px 0; }
     .ctl-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
@@ -114,33 +122,37 @@
         <circle cx="9" cy="9" r="4.5" stroke="#2563eb" stroke-width="1.3" opacity=".62"/>
         <circle cx="9" cy="9" r="1.9" fill="#2563eb"/>
       </svg>
-      Montréal Isochrone
+      <span>Montréal Isochrone</span>
+      <div class="lang" id="lang" role="group" aria-label="Language / Langue">
+        <button type="button" data-lang="fr">FR</button>
+        <button type="button" data-lang="en">EN</button>
+      </div>
     </div>
-    <p class="hint">Click anywhere to drop a start point — the map lights up in colour wherever you can travel by transit within the budget.</p>
+    <p class="hint" data-i18n="hint">Click anywhere to drop a start point — the map lights up in colour wherever you can travel by transit within the budget.</p>
     <div class="ctl">
-      <div class="ctl-top"><span class="ctl-label">Depart at</span><span class="val" id="timeVal">08:00</span></div>
+      <div class="ctl-top"><span class="ctl-label" data-i18n="departAt">Depart at</span><span class="val" id="timeVal">08:00</span></div>
       <input type="range" id="time" min="0" max="1425" step="15" value="480" />
     </div>
     <div class="ctl">
-      <div class="ctl-top"><span class="ctl-label">Time budget</span><span class="val"><b id="budgetVal">30</b> min</span></div>
+      <div class="ctl-top"><span class="ctl-label" data-i18n="timeBudget">Time budget</span><span class="val"><b id="budgetVal">30</b> min</span></div>
       <input type="range" id="budget" min="5" max="90" step="1" value="30" />
-      <div class="subhint">drag or scroll — updates instantly</div>
+      <div class="subhint" data-i18n="dragScroll">drag or scroll — updates instantly</div>
     </div>
     <div class="ctl">
-      <span class="ctl-label">Modes</span>
+      <span class="ctl-label" data-i18n="modes">Modes</span>
       <div class="modes" id="modes">
-        <button data-mode="metro" class="on">Metro</button>
-        <button data-mode="bus" class="on">Bus</button>
-        <button data-mode="rail" class="on">REM / Train</button>
+        <button data-mode="metro" class="on" data-i18n="modeMetro">Metro</button>
+        <button data-mode="bus" class="on" data-i18n="modeBus">Bus</button>
+        <button data-mode="rail" class="on" data-i18n="modeRail">REM / Train</button>
       </div>
     </div>
-    <div id="status">Loading network…</div>
+    <div id="status"></div>
   </div>
   <div id="legend" class="card">
-    <div class="group"><div class="ghead">Legend</div>
-      <div class="key"><span class="zone"></span> Colour = reachable · grey = out of reach</div>
+    <div class="group"><div class="ghead" data-i18n="legendHead">Legend</div>
+      <div class="key"><span class="zone"></span> <span data-i18n="reachKey">Colour = reachable · grey = out of reach</span></div>
     </div>
   </div>
-  <script src="app.js?v=27"></script>
+  <script src="app.js?v=28"></script>
 </body>
 </html>
