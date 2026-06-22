@@ -103,10 +103,15 @@ MAX_TRANSFER_RADIUS_M = 300            # stop -> stop footpath transfers
 MAX_TRANSFER_SECONDS = MAX_TRANSFER_RADIUS_M / WALK_SPEED_MPS
 
 # The first walk (origin -> transit network) may use the whole time budget, so a
-# pin far from any station can still walk to one and ride. Capped here only so
-# the always-at-max-budget computation doesn't explore an unrealistic 90-min
-# walk radius; 45 min covers anyone within a sane walk of transit.
-MAX_ACCESS_WALK_MIN = 45
+# pin far from any station can still walk to one and ride. Capped here so the
+# always-at-max-budget computation doesn't explore an unrealistic walk radius.
+# The access Dijkstra's cost scales ~with explored area (radius^2), so this cap
+# is also the main lever on per-query latency: 35 min (~2.9 km) covers anyone
+# within a realistic walk of transit on the island + near suburbs while keeping
+# the access scan ~40% cheaper than 45 min. (Origins needing a >35-min walk to
+# *any* stop — vanishingly rare in the covered area — lose reach: a deliberate,
+# small fidelity trade for responsiveness.)
+MAX_ACCESS_WALK_MIN = 35
 
 # --- OSM walk graph (Phase 2: real walking network) ---
 # Bounding box (s, w, n, e) for the high-res walk graph: the island PLUS the

@@ -10,8 +10,9 @@ then a **second perf pass** halved the remaining hot path —
 Dijkstra, bisect departure columns, memoised hop geometry, pooled scratch). The
 engine is **deployed on a free Hugging Face Space running PyPy**. Numbers, the
 profile, and what each change did are in [Performance](#performance); the hosting
-shape is in [Deployment](#deployment). What's left is structural, not code: a
-~115 ms fixed HF-proxy tax per request, and the 45-min access-walk exploration.
+shape is in [Deployment](#deployment). What's left is mostly structural: a
+~115 ms fixed HF-proxy tax per request, and the compute runtime (a Rust/PyO3
+kernel). The access-walk cap was trimmed 45→35 min (a small fidelity trade).
 
 ---
 
@@ -140,9 +141,13 @@ print('avg ms', (time.perf_counter()-t)/5*1000)"
 
 - **~115 ms fixed HF-proxy tax** per request on the free tier — unremovable
   without a paid tier / self-hosting. A warm fresh click lands ~250–300 ms live.
-- **45-min access exploration** (`MAX_ACCESS_WALK_MIN`). Shrinking it is the next
-  ~1.5–2× but it's a *fidelity* trade (rare far-from-transit origins lose reach),
-  so it was deliberately **not** done. A Rust/PyO3 kernel is the other big lever.
+- **Access exploration cap** (`MAX_ACCESS_WALK_MIN`). The access Dijkstra cost
+  scales ~with explored area (radius²), so this is the main code-side latency
+  lever. Trimmed **45 → 35 min** (~20% off compute, validated 0 mismatches) — a
+  deliberate, small *fidelity* trade: origins needing a >35-min walk to *any*
+  stop (vanishingly rare here) lose reach. Going lower buys less and risks more.
+- **A Rust/PyO3 compute kernel** is the remaining big lever (10–30× on the hot
+  loops), at the cost of a build toolchain — see git history / discussion.
 
 > Correctness gate: any engine change must keep `python scripts/validate.py` at
 > **0 mismatches** (RAPTOR vs the independent CSA oracle, which uses the *same*
