@@ -9,6 +9,8 @@ backend tier or to the browser (Pyodide/WASM) later without changes.
 from __future__ import annotations
 
 import math
+from array import array
+from bisect import bisect_left
 from dataclasses import dataclass
 
 from config import MAX_ACCESS_WALK_MIN, WALK_SNAP_MAX_M, WALK_SPEED_MPS
@@ -53,17 +55,32 @@ def _earliest_trip(route, p: int, t: int) -> int | None:
     """Earliest trip index whose departure at position p is >= t.
 
     Assumes trips don't overtake (departures nondecreasing by trip index at a
-    fixed position) — true for STM scheduled service. Binary search.
+    fixed position) — true for STM scheduled service. C-level bisect over the
+    route's transposed departure column.
     """
-    dep = route.dep
-    lo, hi = 0, len(dep)
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if dep[mid][p] >= t:
-            hi = mid
-        else:
-            lo = mid + 1
-    return lo if lo < len(dep) else None
+    col = route.dep_cols[p]
+    i = bisect_left(col, t)
+    return i if i < len(col) else None
+
+
+def prepare_network(net: Network) -> None:
+    """One-time per-process precompute that the hot path relies on:
+
+      * per-route transposed departure columns (`Route.dep_cols`) for bisect, and
+      * a cache dict for reconstructed spine-hop geometry (`Network.hop_geom`).
+
+    Idempotent and lazy — `compute_isochrone` calls it on first use, so every
+    entry point (server, validator, profiler) gets prepared networks for free.
+    """
+    if getattr(net, "_prepared", False):
+        return
+    for route in net.routes:
+        dep = route.dep
+        nt = len(dep)
+        route.dep_cols = [array("i", [dep[ti][p] for ti in range(nt)])
+                          for p in range(len(route.stops))]
+    net.hop_geom = {}
+    net._prepared = True
 
 
 def _access_straight(net: Network, lat: float, lon: float, radius_m: float):
@@ -89,16 +106,19 @@ def _access_walk(wg: WalkGraph, lon: float, lat: float, max_sec: float):
     dijkstra(wg, src, int(max_sec), scratch)
     # time to walk from the exact origin onto the snapped node
     base = haversine_m(lat, lon, wg.node_lat[src], wg.node_lon[src]) / WALK_SPEED_MPS
+    # Harvest by iterating the stop-bearing nodes (~10k) and reading their settled
+    # distance, rather than every settled node (~100k) with a dict lookup each.
+    dist = scratch.dist
+    limit = max_sec - base
     reached: dict[int, float] = {}
-    for nd in scratch.dirty:
-        stops_here = wg.node_stops.get(nd)
-        if not stops_here:
+    for nd, stops_here in wg.node_stops.items():
+        dv = dist[nd]
+        if dv > limit:                 # unreached (INF) or beyond the walk budget
             continue
-        t = scratch.dist[nd] + base
-        if t <= max_sec:
-            for s in stops_here:
-                if t < reached.get(s, INF):
-                    reached[s] = t
+        t = dv + base
+        for s in stops_here:
+            if t < reached.get(s, INF):
+                reached[s] = t
     return list(reached.items())
 
 
@@ -116,6 +136,7 @@ def compute_isochrone(
     If ``walk_graph`` is given, origin access legs route along the real street
     network; otherwise they fall back to straight-line distance.
     """
+    prepare_network(net)
     n = net.n_stops
     cutoff = departure_sec + budget_sec
     best = [INF] * n          # earliest arrival overall (the answer)
@@ -175,11 +196,14 @@ def compute_isochrone(
             route = net.routes[ridx]
             if not route_allowed(route):
                 continue
+            stops = route.stops          # locals: hoist attribute lookups out of the loop
+            arr = route.arr
+            cols = route.dep_cols
             trip_idx: int | None = None
             trip_arr = None
             board_pos = pos0
-            for p in range(pos0, len(route.stops)):
-                stop = route.stops[p]
+            for p in range(pos0, len(stops)):
+                stop = stops[p]
                 # if aboard a trip, record/try-to-improve this stop's arrival
                 if trip_arr is not None:
                     a = trip_arr[p]
@@ -191,12 +215,15 @@ def compute_isochrone(
                             parent[stop] = ("transit", ridx, board_pos, p)
                             marked.add(stop)
                 # can we catch an earlier trip here, using last round's arrival?
-                if prev[stop] < INF and (trip_idx is None or prev[stop] <= route.dep[trip_idx][p]):
-                    et = _earliest_trip(route, p, prev[stop])
-                    if et is not None and (trip_idx is None or et < trip_idx):
-                        trip_idx = et
-                        trip_arr = route.arr[et]
-                        board_pos = p
+                pv = prev[stop]
+                if pv < INF:
+                    col = cols[p]
+                    if trip_idx is None or pv <= col[trip_idx]:
+                        et = bisect_left(col, pv)
+                        if et < len(col) and (trip_idx is None or et < trip_idx):
+                            trip_idx = et
+                            trip_arr = arr[et]
+                            board_pos = p
 
         # --- relax single-hop footpaths from this round's transit arrivals ---
         # Seeding from round_transit (a snapshot of transit arrivals) means walk
@@ -251,30 +278,43 @@ def _reconstruct_segments(net: Network, parent, best, departure_sec: int) -> lis
     def travel(stop: int) -> int:
         return int(best[stop] - departure_sec)
 
-    def hop_dist(coords) -> float:
-        return sum(math.hypot((coords[k][0] - coords[k - 1][0]) * _MX,
-                              (coords[k][1] - coords[k - 1][1]) * _MY)
-                   for k in range(1, len(coords)))
-
+    # A hop's drawn geometry (sliced shape / straight fallback) is static per
+    # network — only `travel` changes per query. Memoise it on the network so the
+    # shape slicing + detour check runs once per unique hop ever, not per query.
+    hop_geom = net.hop_geom
     segments: list[list] = []
     for (ridx, i) in transit_hops:
         route = net.routes[ridx]
-        a, b = route.stops[i], route.stops[i + 1]
-        ca, cb = coord(a), coord(b)
-        # trace the leg along the route's real shape geometry when available,
-        # else fall back to a straight stop-to-stop line
-        if route.shape_id and route.stop_shape_idx:
-            shape = net.shapes[route.shape_id]
-            pa, pb = route.stop_shape_idx[i], route.stop_shape_idx[i + 1]
-            mid = [shape[k] for k in range(math.floor(pa) + 1, math.ceil(pb)) if pa < k < pb]
-            coords = [ca] + mid + [cb]
-            # guard against a mis-projected shape slicing in a big detour/loop:
-            # if the traced path is far longer than the straight hop, draw straight.
-            straight = math.hypot((cb[0] - ca[0]) * _MX, (cb[1] - ca[1]) * _MY)
-            if mid and hop_dist(coords) > 1.6 * straight + 250:
-                coords = [ca, cb]
-        else:
-            coords = [ca, cb]
+        b = route.stops[i + 1]
+        coords = hop_geom.get((ridx, i))
+        if coords is None:
+            coords = _trace_hop(net, route, i, coord)
+            hop_geom[(ridx, i)] = coords
         code = 1 if route.route_type in SPINE_TYPES else 0
         segments.append([travel(b), code, route.route_color, coords])
     return segments
+
+
+def _hop_dist(coords) -> float:
+    return sum(math.hypot((coords[k][0] - coords[k - 1][0]) * _MX,
+                          (coords[k][1] - coords[k - 1][1]) * _MY)
+               for k in range(1, len(coords)))
+
+
+def _trace_hop(net: Network, route, i: int, coord) -> list:
+    """Drawable geometry for one stop-to-stop hop: the route's real shape sliced
+    between the two stops, with a straight-line fallback when the shape is absent
+    or a mis-projection would slice in a big detour/loop."""
+    a, b = route.stops[i], route.stops[i + 1]
+    ca, cb = coord(a), coord(b)
+    if route.shape_id and route.stop_shape_idx:
+        shape = net.shapes[route.shape_id]
+        pa, pb = route.stop_shape_idx[i], route.stop_shape_idx[i + 1]
+        mid = [shape[k] for k in range(math.floor(pa) + 1, math.ceil(pb)) if pa < k < pb]
+        coords = [ca] + mid + [cb]
+        straight = math.hypot((cb[0] - ca[0]) * _MX, (cb[1] - ca[1]) * _MY)
+        if mid and _hop_dist(coords) > 1.6 * straight + 250:
+            coords = [ca, cb]
+    else:
+        coords = [ca, cb]
+    return coords

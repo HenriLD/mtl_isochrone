@@ -131,6 +131,13 @@ def main() -> None:
     snap_stops(wg, net, node_hex)
     compute_transfers(wg, net)
 
+    # Bake the packed CSR adjacency and drop the tuple `adj`: the runtime Dijkstra
+    # reads only CSR, so the shipped pickle is smaller and starts up instantly.
+    # (The hex graph above was the last consumer of `adj`.)
+    print("  building CSR adjacency...")
+    wg.build_csr()
+    wg.free_adj()
+
     # the snapping maps live on the graph; don't double-store on both pickles
     with open(WALK_GRAPH_FILE, "wb") as f:
         pickle.dump(wg, f, protocol=pickle.HIGHEST_PROTOCOL)

@@ -17,20 +17,26 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import MAX_BUDGET_MIN, NETWORK_FILE, ROOT, WALK_GRAPH_FILE
-from engine.raptor import ROUTE_TYPE_MODE, SPINE_TYPES, compute_isochrone
+from engine.raptor import ROUTE_TYPE_MODE, SPINE_TYPES, compute_isochrone, prepare_network
 from engine.walk import egress_hex_disc, egress_hex_graph
 
 app = FastAPI(title="Montreal Isochrone")
 
 with open(NETWORK_FILE, "rb") as f:
     NET = pickle.load(f)
+prepare_network(NET)            # build per-route bisect columns + hop-geometry cache up front
 print(f"Loaded network: {NET.n_stops} stops, service date {NET.service_date}")
 
 WALK = None
 if WALK_GRAPH_FILE.exists():
     with open(WALK_GRAPH_FILE, "rb") as f:
         WALK = pickle.load(f)
-    print(f"Loaded walk graph: {WALK.n_nodes} nodes (street-network access enabled)")
+    # Build the packed CSR adjacency once, then drop the bulky tuple `adj` — the
+    # request path routes exclusively through CSR Dijkstra, so this cuts resident
+    # memory sharply (helps the eventual cheap host) and warms the first query.
+    WALK.build_csr()
+    WALK.free_adj()
+    print(f"Loaded walk graph: {WALK.n_nodes} nodes (street-network access enabled, CSR)")
 else:
     print("No walk graph found — using straight-line access (run build_walk_graph.py)")
 

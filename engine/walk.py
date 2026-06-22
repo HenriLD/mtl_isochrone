@@ -12,6 +12,7 @@ plain Python.
 from __future__ import annotations
 
 import heapq
+from array import array
 from dataclasses import dataclass, field
 
 from config import WALK_SPEED_MPS
@@ -36,9 +37,50 @@ class WalkGraph:
     hex_adj: dict = field(default_factory=dict)        # hexkey -> [neighbor hexkey, ...]
     stop_hex: list = field(default_factory=list)       # transit stop -> hexkey (None if off-graph)
 
+    # --- CSR (compressed sparse row) edge layout, built from `adj` ---
+    # The query-time Dijkstra (access legs) is the hot path; iterating `adj` —
+    # 1.5M lists of (neighbor, sec) tuples — burns most of its time on tuple
+    # unpacking and list indirection. CSR flattens every edge into three packed
+    # `array` buffers so the inner loop is plain integer indexing over a slice:
+    #   csr_tgt[csr_off[u]:csr_off[u+1]]  are u's neighbours,
+    #   csr_wt [csr_off[u]:csr_off[u+1]]  their walk-seconds.
+    # ~2x faster than the tuple form and far smaller in memory, so `adj` can be
+    # dropped at runtime (see WalkGraph.free_adj). Built lazily (build_csr) so
+    # pre-CSR pickles keep working.
+    csr_off: object = None     # array('i'), len n_nodes+1
+    csr_tgt: object = None     # array('i'), len n_edges
+    csr_wt: object = None      # array('i'), len n_edges
+
     @property
     def n_nodes(self) -> int:
         return len(self.node_lon)
+
+    def build_csr(self) -> None:
+        """Flatten `adj` into packed CSR arrays. Idempotent; safe on old pickles."""
+        n = len(self.node_lon)
+        adj = self.adj
+        off = array('i', bytes(4 * (n + 1)))
+        acc = 0
+        for u in range(n):
+            off[u] = acc
+            acc += len(adj[u])
+        off[n] = acc
+        tgt = array('i', bytes(4 * acc))
+        wt = array('i', bytes(4 * acc))
+        k = 0
+        for u in range(n):
+            for v, w in adj[u]:
+                tgt[k] = v
+                wt[k] = w
+                k += 1
+        self.csr_off, self.csr_tgt, self.csr_wt = off, tgt, wt
+
+    def free_adj(self) -> None:
+        """Drop the bulky tuple adjacency once CSR exists (runtime memory win).
+        Only the offline build scripts need `adj` (build_hex_graph); the server
+        and validator route exclusively through CSR Dijkstra."""
+        if self.csr_off is not None:
+            self.adj = []
 
     def _cell(self, lon: float, lat: float) -> tuple[int, int]:
         return (int(lat / self.cell_deg), int(lon / self.cell_deg))
@@ -83,24 +125,47 @@ class _Scratch:
 
 
 def dijkstra(wg: WalkGraph, source: int, max_seconds: int, scratch: _Scratch):
-    """Bounded single-source shortest paths. Returns the scratch (dist/prev)."""
+    """Bounded single-source shortest paths over the CSR walk graph, using
+    **Dial's algorithm** (a bucket queue) instead of a binary heap.
+
+    Edge weights are positive integers (walk-seconds) and every settled distance
+    is <= ``max_seconds``, so we bucket frontier nodes by distance and sweep the
+    bucket index upward. Each push/pop is O(1) array work — no log-n heap and no
+    571k heappush/heappop calls per access query — while producing exactly the
+    same shortest paths. Stale bucket entries (a node later improved) are skipped
+    on pop via the usual ``d > dist[u]`` guard.
+
+    Iterates each node's edge slice as packed CSR integer arrays (no tuple
+    unpack). Builds CSR on first use if the graph predates it (old pickles)."""
+    if wg.csr_off is None:
+        wg.build_csr()
     scratch.reset()
-    dist, prev, dirty, adj = scratch.dist, scratch.prev, scratch.dirty, wg.adj
+    dist, prev, dirty = scratch.dist, scratch.prev, scratch.dirty
+    off, tgt, wt = wg.csr_off, wg.csr_tgt, wg.csr_wt
+    buckets: list[list[int]] = [[] for _ in range(max_seconds + 1)]
     dist[source] = 0
     dirty.append(source)
-    heap = [(0, source)]
-    while heap:
-        d, u = heapq.heappop(heap)
-        if d > dist[u]:
+    buckets[0].append(source)
+    d = 0
+    while d <= max_seconds:
+        bucket = buckets[d]
+        if not bucket:
+            d += 1
             continue
-        for v, w in adj[u]:
-            nd = d + w
-            if nd < dist[v] and nd <= max_seconds:
-                if dist[v] == INF:
-                    dirty.append(v)
-                dist[v] = nd
-                prev[v] = u
-                heapq.heappush(heap, (nd, v))
+        u = bucket.pop()
+        if d > dist[u]:                 # stale entry (u already settled shorter)
+            continue
+        base = off[u]
+        for k in range(base, off[u + 1]):
+            nd = d + wt[k]
+            if nd <= max_seconds:
+                v = tgt[k]
+                if nd < dist[v]:
+                    if dist[v] == INF:
+                        dirty.append(v)
+                    dist[v] = nd
+                    prev[v] = u
+                    buckets[nd].append(v)
     return scratch
 
 

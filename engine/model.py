@@ -25,6 +25,12 @@ class Route:
     shape_id: str = ""                     # GTFS shape this pattern follows (key into Network.shapes)
     stop_shape_idx: list[float] = field(default_factory=list)  # per stop: float pos (seg+t) on the shape
 
+    # Transposed departure columns: dep_cols[pos] = packed array of every trip's
+    # departure at that stop position, ascending (trips are sorted, no overtaking).
+    # Lets the "earliest boardable trip" lookup be a C-level bisect over a flat
+    # array instead of a Python binary search over dep[mid][pos]. Built lazily.
+    dep_cols: object = None
+
     @property
     def n_trips(self) -> int:
         return len(self.dep)
