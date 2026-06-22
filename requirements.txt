@@ -1,7 +1,8 @@
 # Ingestion + engine: pure standard library (zipfile, csv, bisect, array) — no
 # third-party packages. Only the API server pulls in dependencies, and they are
-# all pure-Python so the whole stack runs on PyPy (pypy:3.10-slim) for the JIT
-# speedup with no compiled wheels:
+# all pure-Python so the whole stack installs on PyPy (pypy:3.10-slim) with no
+# compiled wheels — critical: anything needing a C/Rust toolchain fails to build
+# there (e.g. huggingface_hub now drags in the Rust hf-xet, so it's NOT listed).
+# Data is read from the /data bucket, so no fetch dependency is needed.
 starlette==0.41.3          # routing / responses / gzip (FastAPI minus pydantic-core)
 uvicorn==0.34.0            # ASGI server (base, not [standard]: no uvloop/httptools C deps)
-huggingface_hub>=0.25      # fetch the compiled pickles from the data bucket on boot
