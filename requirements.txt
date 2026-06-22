@@ -1,0 +1,7 @@
+# Phase 1 keeps dependencies deliberately minimal so the engine stays
+# lightweight and portable (no pandas / osmnx / numpy required for the core).
+#
+# Ingestion + engine: pure standard library (zipfile, csv, bisect, array).
+# Only the dev API server pulls in third-party packages:
+fastapi==0.115.6
+uvicorn[standard]==0.34.0

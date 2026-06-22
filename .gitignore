@@ -1,0 +1,23 @@
+# Data (downloaded / generated — large & regenerable, see README / ARCHITECTURE)
+data/raw/*.zip
+data/raw/osm_walk.json
+data/processed/
+# kept on purpose (small, lets build_network apply metro geometry without Overpass):
+!data/raw/metro_geometry.json
+!data/raw/metro_overpass.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+
+# Editor / OS / tooling
+.DS_Store
+.vscode/
+.idea/
+.claude/
