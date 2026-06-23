@@ -191,12 +191,17 @@ active language at render time; choice persists in `localStorage`.
 
 ## Transit line geometry
 
-- **Buses**: GTFS `shapes.txt`, Douglas-Peucker simplified to 2 m
-  (`gtfs.py:_simplify`). Stops are mapped onto the shape by
+- **Buses**: GTFS `shapes.txt`, **corner-rounded** to read like the OSM metro
+  geometry — `gtfs.smooth_shape` runs Chaikin-style corner-cutting on the *dense*
+  shape with a **metric cap** (`_round_corners`, ~7 m) so long/sparse segments
+  stay on the road (drift ≤ ~7 m), then Douglas-Peucker (the "simplify smartly"
+  half: bus vertices end up **0.84×** the old 2 m-DP count). Geometry only —
+  travel times unaffected (`validate.py` 0 mismatches); `scripts/smooth_bus_shapes.py`
+  migrates an existing `network.pkl` in place. Stops map onto the shape via
   `project_stops_to_shape` — **nearest point on segment** (not nearest vertex),
-  strictly increasing, so sparse express segments don't mis-snap. A per-hop
-  detour guard in `_trace_hop` (memoised by `_reconstruct_segments`) falls back to
-  a straight leg if the sliced shape is > 1.6× the straight distance (kills loops).
+  strictly increasing, so sparse express segments don't mis-snap. A per-hop detour
+  guard in `_trace_hop` (memoised by `_reconstruct_segments`) falls back to a
+  straight leg if the sliced shape is > 1.6× the straight distance (kills loops).
 - **Metro**: STM's GTFS metro shapes are garbage-coarse (~1 vertex/station →
   straight hops). Replaced with **OSM tunnel geometry**: `fetch_metro_geometry.py`
   (Overpass, cached) stitches each line's ways into the longest terminus-to-

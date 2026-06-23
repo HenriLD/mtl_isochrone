@@ -56,6 +56,41 @@ def _simplify(pts: list, tol_m: float = 8.0) -> list:
     return [pts[k] for k in range(len(pts)) if keep[k]]
 
 
+def _round_corners(pts: list, iters: int, cap_m: float) -> list:
+    """Corner-cutting smoothing (Chaikin-style) with a **metric cap**, endpoints
+    preserved. Plain Chaikin cuts each corner by 1/4 of its segments — fine on
+    dense geometry, but on a long sparse segment that 1/4 is tens of metres and
+    the line cuts across blocks. Capping the cut at ~cap_m means long segments are
+    barely rounded (stay on the road) while dense corners still smooth fully, so
+    the smoothed line never drifts more than ~cap_m from the original."""
+    for _ in range(iters):
+        if len(pts) < 3:
+            break
+        out = [pts[0]]
+        for i in range(len(pts) - 1):
+            (px, py), (qx, qy) = pts[i], pts[i + 1]
+            seg = math.hypot((qx - px) * _SHX, (qy - py) * _SHY)
+            f = 0.25 if seg <= 0 else min(0.25, cap_m / seg)
+            out.append([px + f * (qx - px), py + f * (qy - py)])
+            out.append([qx - f * (qx - px), qy - f * (qy - py)])
+        out.append(pts[-1])
+        pts = out
+    return pts
+
+
+def smooth_shape(coords: list, iters: int = 2, cap_m: float = 7.0, tol_m: float = 3.0) -> list:
+    """Round a bus shape's angular GTFS corners so it reads like the OSM-derived
+    metro geometry, then Douglas-Peucker the result back down so the smoother curve
+    doesn't inflate the vertex count (the "simplify smartly" half). **Must run on
+    the DENSE original shape** (smoothing the already-simplified one cuts corners
+    badly). Returns 5-decimal [lon,lat]. Rendering only — stop projection re-runs
+    on the smoothed shape, but travel times are unaffected."""
+    if len(coords) < 3:
+        return coords
+    sm = _simplify(_round_corners(coords, iters, cap_m), tol_m=tol_m)
+    return [[round(x, 5), round(y, 5)] for x, y in sm]
+
+
 def _open_csv(zf: zipfile.ZipFile, name: str):
     """Yield dict rows from a GTFS table, or nothing if the table is absent."""
     if name not in zf.namelist():
@@ -133,11 +168,10 @@ def _load_feed(feed: dict, target_date: str | None, acc: dict) -> None:
             )
         for sid, pts in shapes_local.items():
             pts.sort()
-            # 5 decimals (~1 m) + light Douglas-Peucker. Keep the tolerance small:
-            # at 8 m it crushed winding bus routes to a handful of points and made
-            # legs cut straight across blocks. 2 m preserves the street path.
-            coords = [[round(lon, 5), round(lat, 5)] for (_, lon, lat) in pts]
-            acc["shapes"][f"{fid}:{sid}"] = _simplify(coords, tol_m=2.0)
+            # Keep the DENSE polyline (5 decimals ~1 m) here; geometry is finalised
+            # per-mode in build_network (bus shapes are corner-rounded, the rest
+            # Douglas-Peucker'd) — both of which need the dense original to work.
+            acc["shapes"][f"{fid}:{sid}"] = [[round(lon, 5), round(lat, 5)] for (_, lon, lat) in pts]
 
         # stops: namespace ids, register in the shared index, return local->global map
         local_to_global: dict[str, int] = {}
@@ -243,6 +277,16 @@ def build_network(target_date: str | None = None) -> Network:
     print(f"Ingesting {len(GTFS_FEEDS)} feed(s)...")
     for feed in GTFS_FEEDS:
         _load_feed(feed, target_date, acc)
+
+    # Finalise shape geometry from the dense GTFS polylines (before stops are
+    # projected onto them): bus shapes are corner-rounded so the spine reads like
+    # the OSM metro geometry; spine types {0,1,2} (metro/REM/exo) are Douglas-
+    # Peucker'd as before (metro is later replaced by OSM geometry anyway).
+    bus_shapes = {pat["shape_id"] for pat in acc["patterns"].values()
+                  if pat["shape_id"] and pat["route_type"] not in (0, 1, 2)}
+    for sid, dense in list(acc["shapes"].items()):
+        acc["shapes"][sid] = smooth_shape(dense) if sid in bus_shapes else _simplify(dense, tol_m=2.0)
+    print(f"  smoothed {len(bus_shapes)} bus shapes")
 
     net = Network(
         stop_ids=acc["stop_ids"], stop_name=acc["stop_name"],
