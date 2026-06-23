@@ -17,6 +17,9 @@ Pick a starting point on a map of Montreal, set a departure time and a time
 budget, and see everywhere reachable by transit within that budget — computed
 by a custom range-RAPTOR engine over real STM schedules.
 
+![Reachable area around downtown Montréal revealed in full colour, with the
+metro / REM / exo transit spine cutting through the greyscale unreachable zone](docs/images/hero.jpg)
+
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the engineering/performance
 orientation, and [`montreal-isochrone-plan.md`](montreal-isochrone-plan.md) for
 the full multi-phase plan.
@@ -25,6 +28,18 @@ The map reads as an **expanding zone**: everywhere reachable shows the basemap i
 full colour, everywhere else is the same map in **black & white**, with a
 **transit spine** (metro/REM/exo in official line colours, bus feeders in one
 rose) cutting through. The full ARTM regional network is loaded (STM + REM + exo).
+The whole UI is **bilingual** (French by default — `FR`/`EN` toggle in the panel).
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/budget.jpg" alt="A 20-minute budget shrinks the reachable area to downtown"></td>
+<td width="50%"><img src="docs/images/english.jpg" alt="The same map in English at a 60-minute budget"></td>
+</tr>
+<tr>
+<td align="center"><em>A 20-min budget — the reachable zone shrinks to the core.</em></td>
+<td align="center"><em>English UI, 60-min budget. The slider filters client-side, instantly.</em></td>
+</tr>
+</table>
 
 ## Cost: $0
 
