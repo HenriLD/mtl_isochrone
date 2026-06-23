@@ -37,37 +37,64 @@ Net: static JSON + thumbnails + a small frontend panel + client-side ranking.
 {
   "id": "mtl-001",
   "name": "Parc-nature du Bois-de-l'Île-Bizard",
-  "lat": 45.49, "lon": -73.89,
+  "type": "park",              // eatery | park | neighborhood | landmark | viewpoint | market | historic | art
+  "lat": 45.49, "lon": -73.89, // a neighborhood quest uses a representative CENTRE point
   "neighborhood": "L'Île-Bizard",
-  "vibe": "nature",            // nature | views | food | history | art | wander
+  "avg_dwell_min": 120,        // typical time spent ON SITE — drives the "how long is this side quest" estimate
   "blurb": "Boardwalks over a marsh full of turtles and herons...",
-  "time_est_min": 120,
   "image": "images/quests/mtl-001.jpg",   // local thumbnail (LFS) or null
   "attribution": "Photo: <author> / CC BY-SA 4.0 (Wikimedia Commons)",
-  "source": "wikidata:Q123"               // or osm:way/123
+  "source": "wikidata:Q123"               // or osm:way/123 / osm:relation/123
 }
 ```
 Only `lat/lon` are needed at runtime (client maps to hex → travel); everything
 else is presentation.
 
+### Place types & dwell time
+
+The three first-class types are **eateries, parks, and neighbourhoods**, plus
+landmark / viewpoint / market / historic / art from the harvest. Each carries an
+`avg_dwell_min` (typical on-site time) — set a per-type default in the harvest and
+let the editorial pass tune outliers (a pocket park vs a nature reserve):
+
+| type | what | default dwell |
+|---|---|---:|
+| `eatery` | a worth-a-trip café / restaurant / bar (named, non-chain) | ~60 min |
+| `park` | green space, from pocket parks to nature reserves | ~45–150 min |
+| `neighborhood` | "go wander X" — an area, not a point (centre + longer dwell) | ~120 min |
+| `viewpoint` | a lookout / belvédère | ~25 min |
+| `landmark` / `market` / `historic` / `art` | attraction / market / site / murals | ~45–90 min |
+
+**Side-quest duration** is then computed at runtime: `≈ 2 × travel + avg_dwell_min`
+(round-trip + time there). That's what lets a card say *"~45 min each way · ~2 h
+there · ~3 h round trip"* and lets us offer "I have ~N hours" as a filter.
+
 ## Pipeline (next session)
 
 1. **Harvest** — `scripts/harvest_quests.py` (cache raw responses like
    `metro_overpass.json` so re-runs are offline):
-   - **Overpass** over the region bbox: `tourism` in {attraction, viewpoint,
+   - **Attractions/parks (Overpass)**: `tourism` in {attraction, viewpoint,
      museum, gallery, artwork, zoo, theme_park}, `leisure` in {park,
      nature_reserve, garden}, `natural` in {beach, peak}, `historic=*`,
-     `amenity=marketplace`. Keep name + coords + tags.
+     `amenity=marketplace`. Keep name + coords + tags → type park/viewpoint/etc.
+   - **Eateries (Overpass)**: `amenity` in {restaurant, cafe, bar, pub,
+     ice_cream} — **named, non-chain** (exclude a chain-name blocklist). OSM has
+     no ratings, so harvest wide and let the editorial pass + known food lists do
+     the "worth it" filter; this is the type that most needs human/Claude judgment.
+   - **Neighbourhoods (Overpass + GeoJSON)**: `place` in {neighbourhood, suburb,
+     quarter} and/or a Montréal boroughs/quartiers GeoJSON → each a "go wander X"
+     quest with a centre point and a longer dwell.
    - **Wikidata SPARQL**: items with coordinates in the Montréal area, an image
      (`P18`), and an en/fr Wikipedia sitelink. Pull label, description, image,
-     sitelink count (notability signal).
+     sitelink count (notability signal) — main image + notability source.
 2. **Merge + score** — match OSM↔Wikidata by proximity + name; score =
    notability (sitelinks) + tag quality + has-image.
 3. **Geo-diversify** — bin by borough/neighbourhood (a boroughs GeoJSON, or a
    coarse grid), cap ~6–10 per bin, up-weight sparse outer areas → ~300
    candidates spread across the region.
-4. **Editorial pass (Claude)** — write side-quest blurbs, assign `vibe`,
-   `time_est_min`, prune to ~150, ensure outer-neighbourhood coverage. User
+4. **Editorial pass (Claude)** — write side-quest blurbs, assign `type` and tune
+   `avg_dwell_min`, prune to ~150 (esp. the eateries, where "worth it" is
+   editorial), ensure a mix of types and outer-neighbourhood coverage. User
    reviews / tweaks.
 5. **Images** — `scripts/fetch_quest_images.py`: download the source image,
    thumbnail to ~400 px JPEG into `web/images/quests/` (LFS), record attribution;
@@ -78,10 +105,14 @@ else is presentation.
 - Load `side_quests.json` once.
 - On each isochrone result: per quest, `travel` = fog travel of its hex (fallback:
   nearest reached stop + straight-line walk). Reachable iff `travel <= budget`.
+- **Duration estimate** per quest: `≈ 2 × travel + avg_dwell_min` (round-trip +
+  time there). Drives the card text and an optional "I have ~N hours" filter.
 - **Suggestion ranking**: reachable AND in the outer band (≈ 0.6–1.0 × budget);
   score = w1·(travel/budget) [farther = better] + w2·novelty (distance from
-  origin / different neighbourhood) + w3·quality. Show top ~5 as cards (image,
-  name, neighbourhood, "~X min", blurb, vibe icon) + an "Another" reshuffle.
+  origin / different neighbourhood) + w3·quality. Aim for a spread of types and
+  durations (a quick park *and* a far neighbourhood). Show top ~5 as cards (image,
+  name, neighbourhood, type icon, "~45 min each way · ~3 h round trip", blurb) +
+  an "Another" reshuffle.
 - v2: click a card → highlight the route there (the spine already has geometry to
   the nearest stop).
 - Hosting: ranking + cards are client-side; images static. $0.
