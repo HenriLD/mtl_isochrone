@@ -1,1 +1,2 @@
 docs/images/*.jpg filter=lfs diff=lfs merge=lfs -text
+web/images/quests/*.jpg filter=lfs diff=lfs merge=lfs -text

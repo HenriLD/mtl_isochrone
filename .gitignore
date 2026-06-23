@@ -21,3 +21,7 @@ node_modules/
 .vscode/
 .idea/
 .claude/
+
+# side-quest harvest caches (regenerable; side_quests.json is the artifact)
+data/raw/quests_overpass.json
+data/raw/quests_wikidata.json

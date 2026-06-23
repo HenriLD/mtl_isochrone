@@ -166,6 +166,12 @@ const I18N = {
     result: (n, m, ms) => `${n} arrêts accessibles en ${m} min ou moins · ${ms} ms`,
     apiErr: "Impossible de joindre l'API. Le serveur est-il démarré ?",
     queryErr: "Échec de la requête.",
+    questsTitle: "Quêtes secondaires",
+    questsHint: "Cliquez sur la carte pour des idées de sorties vers les confins du réseau.",
+    questsNone: "Rien d'épinglé à portée pour ce budget — montez le temps.",
+    questEachWay: (m) => `~${m} min aller`,
+    questOuting: (d) => `sortie d'environ ${d}`,
+    questMore: "Plus d'info", questMaps: "Maps", questShuffle: "Autres idées",
   },
   en: {
     hint: "Click anywhere to drop a start point — the map lights up in colour wherever you can travel by transit within the budget.",
@@ -182,6 +188,12 @@ const I18N = {
     result: (n, m, ms) => `${n} stops reachable within ${m} min · ${ms} ms`,
     apiErr: "Could not reach API. Is the server running?",
     queryErr: "Query failed.",
+    questsTitle: "Side quests",
+    questsHint: "Click the map for outing ideas out toward the edge of the network.",
+    questsNone: "Nothing pinned in range for this budget — raise the time.",
+    questEachWay: (m) => `~${m} min each way`,
+    questOuting: (d) => `about ${d} out`,
+    questMore: "More info", questMaps: "Maps", questShuffle: "Shuffle",
   },
 };
 let lang = localStorage.getItem("lang") === "en" ? "en" : "fr";   // FR default (QC)
@@ -206,6 +218,7 @@ function applyLang() {
   document.querySelectorAll("#lang button").forEach((b) => b.classList.toggle("on", b.dataset.lang === lang));
   renderStatus();
   renderLegend();
+  if (typeof renderQuests === "function") renderQuests();
 }
 $("lang").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -344,6 +357,7 @@ map.on("load", async () => {
   ready = true;
   drawBudget(state.budget * 60);
   fetchLegend();
+  loadQuests();
 });
 
 // --- legend: the actual rapid-transit lines in the network (from /api/lines),
@@ -403,12 +417,14 @@ function drawBudget(spineCut, fogCut = spineCut) {
     // the GPU — no data re-upload (this is what makes the budget slider free).
     maskMap.setPaintProperty("veil", "fill-opacity", veilOpacity(fogCut));
   }
+  if (typeof renderQuests === "function") renderQuests();   // re-rank quests for the new budget
 }
 
 // reset every cell back to grey before a new query: drop all reveal state in a
 // single call (geometry stays uploaded; cells re-reveal as the new fog streams).
 function clearReach() {
   if (maskReady && maskMap.getSource("veil")) maskMap.removeFeatureState({ source: "veil" });
+  fogTravel.clear();
 }
 
 // --- fetch (only on origin / departure / mode change) ---
@@ -477,10 +493,106 @@ async function streamFog(params, sig) {
         // cheap per-cell reveal — no geometry re-upload; MapLibre coalesces the
         // re-render so each streamed chunk repaints at most once.
         if (idx !== undefined) maskMap.setFeatureState({ source: "veil", id: idx }, { travel: c[0] });
+        fogTravel.set(c[1] + "," + c[2], c[0]);    // for side-quest travel lookup
       }
     }
+    if (!sig.aborted) renderQuests();              // suggest quests once the fog is in
   } catch (e) { /* aborted or no fog */ }
 }
+
+// --- side quests -----------------------------------------------------------
+// Curated POIs surfaced from the CURRENT origin, biased to the far edge of what's
+// reachable. A place's travel time is a client-side lookup: map its lat/lon to a
+// fog hex (same projection as the engine) and read the streamed travel. So this
+// is static JSON + a hex lookup — no extra server work.
+const QTYPE_ICON = { eatery: "🍴", park: "🌳", neighborhood: "🏘️", viewpoint: "🌅",
+  market: "🛒", landmark: "🏛️", historic: "🗿", art: "🎨" };
+let quests = [];
+let fogTravel = new Map();          // "q,r" -> travel seconds (filled as fog streams)
+let questSeed = 1;
+const _esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+
+// must match engine/walk.py _hex_key (pointy-top axial + cube rounding)
+function hexKey(lon, lat) {
+  const s = HEX_M, mx = lon * HEX_SX, my = lat * HEX_SY;
+  const x = (HEX_SQ3 / 3 * mx - 1 / 3 * my) / s, z = (2 / 3 * my) / s, y = -x - z;
+  let rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
+  const dx = Math.abs(rx - x), dy = Math.abs(ry - y), dz = Math.abs(rz - z);
+  if (dx > dy && dx > dz) rx = -ry - rz; else if (dy > dz) ry = -rx - rz; else rz = -rx - ry;
+  return rx + "," + rz;
+}
+function questTravel(qst) {              // min travel over the quest's hex + neighbours
+  const base = hexKey(qst.lon, qst.lat);
+  const [q, r] = base.split(",").map(Number);
+  let best = fogTravel.get(base);
+  for (const [dq, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]]) {
+    const tv = fogTravel.get((q + dq) + "," + (r + dr));
+    if (tv != null && (best == null || tv < best)) best = tv;
+  }
+  return best == null ? null : best;
+}
+function _qrng(seed, id) {                // deterministic jitter per (seed, quest) for stable shuffle
+  let h = (2166136261 ^ seed) >>> 0;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  return ((h >>> 0) % 1000) / 1000;
+}
+function fmtDur(min) {
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return m ? `${h} h ${String(m).padStart(2, "0")}` : `${h} h`;
+}
+function rankQuests() {
+  if (!quests.length || !fogTravel.size) return [];
+  const budget = state.budget * 60;
+  const scored = [];
+  for (const qst of quests) {
+    const tv = questTravel(qst);
+    if (tv == null || tv > budget) continue;
+    const far = tv / budget;                          // 0..1; bias toward the outer band
+    const band = far < 0.5 ? far * 0.6 : far;
+    const quality = (qst.image ? 0.5 : 0) + (qst.wikipedia ? 0.3 : 0);
+    scored.push({ qst, tv, score: band * 1.6 + quality + _qrng(questSeed, qst.id) * 0.3 });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const picks = [], seenN = new Set();                // spread across neighbourhoods
+  for (const s of scored) {
+    if (seenN.has(s.qst.neighborhood)) continue;
+    seenN.add(s.qst.neighborhood); picks.push(s);
+    if (picks.length >= 4) break;
+  }
+  for (const s of scored) { if (picks.length >= 4) break; if (!picks.includes(s)) picks.push(s); }
+  return picks;
+}
+function questCard(qst, tv) {
+  const travelMin = Math.round(tv / 60);
+  const total = Math.round((2 * travelMin + qst.avg_dwell_min) / 15) * 15;
+  const icon = QTYPE_ICON[qst.type] || "📍";
+  const blurb = (lang === "fr" ? qst.blurb_fr : qst.blurb_en) || qst.blurb_en || qst.blurb_fr || "";
+  const more = qst.website || qst.wikipedia;
+  const maps = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(qst.name + " " + qst.lat + "," + qst.lon)}`;
+  const img = qst.image
+    ? `<div class="qimg" style="background-image:url('${_esc(qst.image)}')"></div>`
+    : `<div class="qimg qph">${icon}</div>`;
+  const links = (more ? `<a href="${_esc(more)}" target="_blank" rel="noopener">${t("questMore")}</a>` : "")
+    + `<a href="${maps}" target="_blank" rel="noopener">${t("questMaps")}</a>`;
+  return `<article class="quest">${img}<div class="qbody">`
+    + `<div class="qname">${icon} ${_esc(qst.name)}</div>`
+    + `<div class="qmeta">${_esc(qst.neighborhood)} · ${t("questEachWay")(travelMin)} · ${t("questOuting")(fmtDur(total))}</div>`
+    + `<div class="qblurb">${_esc(blurb)}</div><div class="qlinks">${links}</div></div></article>`;
+}
+function renderQuests() {
+  const el = $("quests"); if (!el) return;
+  const body = el.querySelector(".qlist"); if (!body) return;
+  if (!state.origin) { body.innerHTML = `<p class="qempty">${t("questsHint")}</p>`; return; }
+  const picks = rankQuests();
+  body.innerHTML = picks.length ? picks.map((p) => questCard(p.qst, p.tv)).join("")
+    : `<p class="qempty">${t("questsNone")}</p>`;
+}
+async function loadQuests() {
+  try { quests = await (await fetch("side_quests.json")).json(); } catch { quests = []; }
+  renderQuests();
+}
+$("questShuffle").addEventListener("click", () => { questSeed++; renderQuests(); });
 
 // apply the saved/default language now that every translatable element + the
 // dynamic renderers (status, legend) are defined.
