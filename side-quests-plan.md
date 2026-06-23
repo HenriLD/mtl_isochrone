@@ -42,6 +42,9 @@ Net: static JSON + thumbnails + a small frontend panel + client-side ranking.
   "neighborhood": "L'Île-Bizard",
   "avg_dwell_min": 120,        // typical time spent ON SITE — drives the "how long is this side quest" estimate
   "blurb": "Boardwalks over a marsh full of turtles and herons...",
+  "website": "https://www.pamm.qc.ca/...",  // official site (OSM website/url/contact:website, else Wikidata P856); null if none
+  "wikipedia": "https://fr.wikipedia.org/wiki/...",  // Wikidata sitelink, fr preferred; null if none
+  // a Google Maps link is BUILT AT RUNTIME from name+coords (hours/reviews/directions) — not stored
   "image": "images/quests/mtl-001.jpg",   // local thumbnail (LFS) or null
   "attribution": "Photo: <author> / CC BY-SA 4.0 (Wikimedia Commons)",
   "source": "wikidata:Q123"               // or osm:way/123 / osm:relation/123
@@ -49,6 +52,15 @@ Net: static JSON + thumbnails + a small frontend panel + client-side ranking.
 ```
 Only `lat/lon` are needed at runtime (client maps to hex → travel); everything
 else is presentation.
+
+### Links / "more info"
+
+Each card offers a "more info" link, prioritised **official `website` → `wikipedia`**,
+plus an **always-present Google Maps** link built client-side from name + coords
+(`https://www.google.com/maps/search/?api=1&query=<name>%20<lat>,<lon>`) — the
+reliable one for hours, reviews, photos and directions, and the most useful for
+eateries (which often have a Maps presence but no website). So the JSON only
+stores `website`/`wikipedia` (nullable); Maps needs no harvesting.
 
 ### Place types & dwell time
 
@@ -86,7 +98,11 @@ there · ~3 h round trip"* and lets us offer "I have ~N hours" as a filter.
      quest with a centre point and a longer dwell.
    - **Wikidata SPARQL**: items with coordinates in the Montréal area, an image
      (`P18`), and an en/fr Wikipedia sitelink. Pull label, description, image,
-     sitelink count (notability signal) — main image + notability source.
+     sitelink count (notability signal), official site (`P856`), and the fr/en
+     Wikipedia URL — main image + notability + link source.
+   - **Links from OSM**: `website` / `url` / `contact:website` tags → `website`
+     (prefer OSM's, else Wikidata `P856`). The Google Maps link is constructed at
+     runtime, not harvested.
 2. **Merge + score** — match OSM↔Wikidata by proximity + name; score =
    notability (sitelinks) + tag quality + has-image.
 3. **Geo-diversify** — bin by borough/neighbourhood (a boroughs GeoJSON, or a
@@ -111,8 +127,9 @@ there · ~3 h round trip"* and lets us offer "I have ~N hours" as a filter.
   score = w1·(travel/budget) [farther = better] + w2·novelty (distance from
   origin / different neighbourhood) + w3·quality. Aim for a spread of types and
   durations (a quick park *and* a far neighbourhood). Show top ~5 as cards (image,
-  name, neighbourhood, type icon, "~45 min each way · ~3 h round trip", blurb) +
-  an "Another" reshuffle.
+  name, neighbourhood, type icon, "~45 min each way · ~3 h round trip", blurb,
+  and a "more info" link — official site/Wikipedia + a Google Maps link) + an
+  "Another" reshuffle.
 - v2: click a card → highlight the route there (the spine already has geometry to
   the nearest stop).
 - Hosting: ranking + cards are client-side; images static. $0.
