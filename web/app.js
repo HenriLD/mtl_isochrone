@@ -603,9 +603,12 @@ function addQuestPin(qst, n) {
     setQuestHi(qst.id, true);
     setTimeout(() => setQuestHi(qst.id, false), 1100);
   });
-  // on the spine overlay (above the fog) so pins are never hidden by the grey
+  // on the MAIN map (like the origin marker) so the pin is glued to the map's own
+  // transform and doesn't lag/float on zoom the way an overlay-synced marker does.
+  // Quests sit on reachable cells, where the desaturation mask is transparent, so
+  // they show through.
   const marker = new maplibregl.Marker({ element: el, anchor: "center" })
-    .setLngLat([qst.lon, qst.lat]).addTo(spineMap);
+    .setLngLat([qst.lon, qst.lat]).addTo(map);
   questMarkers.push({ id: qst.id, el, marker });
 }
 function renderQuests() {
