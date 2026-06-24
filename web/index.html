@@ -142,6 +142,32 @@
       transition: background .12s ease, transform .12s ease; }
     .quest-pin-anchor.hi .quest-pin { background: #f59e0b; transform: scale(1.3); }
 
+    /* ---- bottom-right info bubble ---- */
+    #infoBtn { position: absolute; z-index: 4; bottom: 14px; right: 14px;
+      width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.75);
+      background: var(--panel-bg); color: var(--ink-soft);
+      backdrop-filter: blur(16px) saturate(1.35); -webkit-backdrop-filter: blur(16px) saturate(1.35);
+      box-shadow: 0 4px 14px rgba(18,28,45,0.18), inset 0 1px 0 rgba(255,255,255,0.7);
+      font: 800 15px/1 Georgia, "Times New Roman", serif; font-style: italic; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: color .15s, border-color .15s; }
+    #infoBtn:hover, #infoBtn[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+    #infoCard { bottom: 54px; right: 14px; width: 320px; max-height: min(72vh, 560px);
+      overflow-y: auto; padding: 14px 16px 15px; font-size: 11.5px; line-height: 1.5;
+      color: #39424f; }
+    #infoCard[hidden] { display: none; }
+    #infoCard h2 { font-size: 13.5px; font-weight: 750; letter-spacing: -.01em;
+      color: var(--ink); margin: 0 0 9px; }
+    #infoCard h3 { font-size: 9.5px; font-weight: 800; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--ink-faint); margin: 13px 0 5px; }
+    #infoCard p { margin: 0 0 6px; }
+    #infoCard ul { margin: 0; padding-left: 15px; }
+    #infoCard li { margin: 3px 0; }
+    #infoCard a { color: var(--accent); text-decoration: none; font-weight: 600; }
+    #infoCard a:hover { text-decoration: underline; }
+    #infoCard .ifoot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+      font-size: 10px; color: var(--ink-faint); }
+
     /* pulsing origin marker — 0-size anchor with dot + ring both centred on the
        exact point, so the pulse stays aligned with the dot at all zooms */
     .origin-dot { position: relative; width: 0; height: 0; }
@@ -203,7 +229,14 @@
       <button id="questShuffle" class="qshuffle" data-i18n="questShuffle">Shuffle</button></div>
     <div class="qlist"></div>
   </div>
+  <!-- bottom-right info bubble: data sources, credits & data-collection policy.
+       Also carries the required map attribution (the default control is off). -->
+  <div id="infoCard" class="card" role="dialog" aria-modal="false" aria-labelledby="infoTitle" hidden>
+    <div class="ibody"></div>
+  </div>
+  <button id="infoBtn" type="button" aria-expanded="false" aria-controls="infoCard"
+          aria-label="About & data sources">i</button>
   <script src="hex.js?v=1"></script>
-  <script src="app.js?v=36"></script>
+  <script src="app.js?v=38"></script>
 </body>
 </html>
