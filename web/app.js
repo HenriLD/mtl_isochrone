@@ -14,7 +14,8 @@ const BUS_COLOR = "#c2557f";       // one colour for all bus lines (rose; not bl
 // grid over the WHOLE bbox (land + water), and the budget filter punches the
 // reachable cells out to reveal the colour map. A full grid tiles exactly, so a
 // tiny oversize (just to kill antialias hairlines) is all we need — no erosion.
-const HEX_M = 140, HEX_SX = 111320 * Math.cos(45.5 * Math.PI / 180), HEX_SY = 110540, HEX_SQ3 = Math.sqrt(3);
+// HEX_M / HEX_SX / HEX_SY / HEX_SQ3 + hexKey() come from hex.js (loaded first) —
+// shared with the engine's projection and CI-checked against it.
 const HEX_OVERSIZE = 1.03;
 const SENTINEL = 1e9;                    // travel for unreachable cells -> always grey
 // Extent of the grey/desaturation zone. Extended SOUTH (and a touch EAST) past the
@@ -512,16 +513,7 @@ let fogTravel = new Map();          // "q,r" -> travel seconds (filled as fog st
 let questSeed = 1;
 const _esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
 
-// must match engine/walk.py _hex_key (pointy-top axial + cube rounding)
-function hexKey(lon, lat) {
-  const s = HEX_M, mx = lon * HEX_SX, my = lat * HEX_SY;
-  const x = (HEX_SQ3 / 3 * mx - 1 / 3 * my) / s, z = (2 / 3 * my) / s, y = -x - z;
-  let rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
-  const dx = Math.abs(rx - x), dy = Math.abs(ry - y), dz = Math.abs(rz - z);
-  if (dx > dy && dx > dz) rx = -ry - rz; else if (dy > dz) ry = -rx - rz; else rz = -rx - ry;
-  return rx + "," + rz;
-}
-function questTravel(qst) {              // min travel over the quest's hex + neighbours
+function questTravel(qst) {              // min travel over the quest's hex + neighbours (hexKey from hex.js)
   const base = hexKey(qst.lon, qst.lat);
   const [q, r] = base.split(",").map(Number);
   let best = fogTravel.get(base);

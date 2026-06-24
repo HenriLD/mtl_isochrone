@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Engine correctness (RAPTOR == CSA on a synthetic fixture) + geometry / walk /
+  # asset tests. Pure stdlib, no deps, no data — uses tests/fixtures.py, not the
+  # git-ignored pickles. (checkout keeps LFS as pointers; the asset test only
+  # checks image PATHS exist, which is fine.)
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  # Frontend syntax + the JS<->Python hexKey contract (web/hex.js must match
+  # engine/walk.py _hex_key, which the side-quests panel relies on).
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node --check web/hex.js
+      - run: node --check web/app.js
+      - run: node tests/hexkey_contract.js
+
+  # The deploy-breaking-bug guard: install the runtime deps on PyPy (the Space's
+  # runtime) and import the stack. Catches compiled-wheel-on-PyPy breakage
+  # (pydantic-core, hf-xet) BEFORE it reaches the Space.
+  pypy-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "pypy3.10"
+      - run: pip install --no-cache-dir -r requirements.txt
+      - run: python -c "import engine.raptor, engine.walk, engine.gtfs, engine.model, engine.reference_csa, starlette, uvicorn; print('PyPy stack imports OK')"
+
+  # CD: on a green push to main, mirror the code to the HF Space (code only — the
+  # network.pkl in the /data bucket stays manual). Expected fast-forward; if it
+  # ever rejects, investigate rather than force.
+  deploy:
+    needs: [engine, frontend, pypy-install]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-space
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN secret not set — skipping deploy. Add it (Settings → Secrets) to enable auto-deploy."
+            exit 0
+          fi
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git remote add space "https://HenriLD:${HF_TOKEN}@huggingface.co/spaces/HenriLD/mtl_isochrone"
+          git push space HEAD:main
