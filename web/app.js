@@ -422,7 +422,7 @@ function drawBudget(spineCut, fogCut = spineCut) {
     // the GPU — no data re-upload (this is what makes the budget slider free).
     maskMap.setPaintProperty("veil", "fill-opacity", veilOpacity(fogCut));
   }
-  if (typeof renderQuests === "function") renderQuests();   // re-rank quests for the new budget
+  if (typeof scheduleRenderQuests === "function") scheduleRenderQuests();   // re-rank quests for the new budget (debounced)
 }
 
 // reset every cell back to grey before a new query: drop all reveal state in a
@@ -515,6 +515,8 @@ const QTYPE_ICON = { eatery: "🍴", park: "🌳", neighborhood: "🏘️", view
 let quests = [];
 let fogTravel = new Map();          // "q,r" -> travel seconds (filled as fog streams)
 let questSeed = 1;
+let questMarkers = [];              // [{id, el, marker}] for the on-map pins
+let _questTimer = null;
 const _esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
 
 function questTravel(qst) {              // min travel over the quest's hex + neighbours (hexKey from hex.js)
@@ -554,12 +556,12 @@ function rankQuests() {
   for (const s of scored) {
     if (seenN.has(s.qst.neighborhood)) continue;
     seenN.add(s.qst.neighborhood); picks.push(s);
-    if (picks.length >= 4) break;
+    if (picks.length >= 5) break;
   }
-  for (const s of scored) { if (picks.length >= 4) break; if (!picks.includes(s)) picks.push(s); }
+  for (const s of scored) { if (picks.length >= 5) break; if (!picks.includes(s)) picks.push(s); }
   return picks;
 }
-function questCard(qst, tv) {
+function questCard(qst, tv, n) {
   const travelMin = Math.round(tv / 60);
   const total = Math.round((2 * travelMin + qst.avg_dwell_min) / 15) * 15;
   const icon = QTYPE_ICON[qst.type] || "📍";
@@ -571,19 +573,59 @@ function questCard(qst, tv) {
     : `<div class="qimg qph">${icon}</div>`;
   const links = (more ? `<a href="${_esc(more)}" target="_blank" rel="noopener">${t("questMore")}</a>` : "")
     + `<a href="${maps}" target="_blank" rel="noopener">${t("questMaps")}</a>`;
-  return `<article class="quest">${img}<div class="qbody">`
-    + `<div class="qname">${icon} ${_esc(qst.name)}</div>`
+  return `<article class="quest" data-qid="${_esc(qst.id)}">${img}<div class="qbody">`
+    + `<div class="qname"><span class="qnum">${n}</span>${icon} ${_esc(qst.name)}</div>`
     + `<div class="qmeta">${_esc(qst.neighborhood)} · ${t("questEachWay")(travelMin)} · ${t("questOuting")(fmtDur(total))}</div>`
     + `<div class="qblurb">${_esc(blurb)}</div><div class="qlinks">${links}</div></div></article>`;
+}
+
+// highlight a quest's pin AND its card together (hover correlation, both directions)
+function setQuestHi(id, on) {
+  const m = questMarkers.find((x) => x.id === id);
+  if (m) m.el.classList.toggle("hi", on);
+  const card = document.querySelector(`#quests .quest[data-qid="${CSS.escape(id)}"]`);
+  if (card) card.classList.toggle("hi", on);
+}
+function clearQuestPins() {
+  for (const m of questMarkers) m.marker.remove();
+  questMarkers = [];
+}
+function addQuestPin(qst, n) {
+  const el = document.createElement("div");
+  el.className = "quest-pin";
+  el.textContent = n;
+  el.title = qst.name;
+  el.addEventListener("mouseenter", () => setQuestHi(qst.id, true));
+  el.addEventListener("mouseleave", () => setQuestHi(qst.id, false));
+  el.addEventListener("click", () => {           // click a pin -> reveal its card
+    const card = document.querySelector(`#quests .quest[data-qid="${CSS.escape(qst.id)}"]`);
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setQuestHi(qst.id, true);
+    setTimeout(() => setQuestHi(qst.id, false), 1100);
+  });
+  // on the spine overlay (above the fog) so pins are never hidden by the grey
+  const marker = new maplibregl.Marker({ element: el, anchor: "center" })
+    .setLngLat([qst.lon, qst.lat]).addTo(spineMap);
+  questMarkers.push({ id: qst.id, el, marker });
 }
 function renderQuests() {
   const el = $("quests"); if (!el) return;
   const body = el.querySelector(".qlist"); if (!body) return;
+  clearQuestPins();
   if (!state.origin) { body.innerHTML = `<p class="qempty">${t("questsHint")}</p>`; return; }
   const picks = rankQuests();
-  body.innerHTML = picks.length ? picks.map((p) => questCard(p.qst, p.tv)).join("")
-    : `<p class="qempty">${t("questsNone")}</p>`;
+  if (!picks.length) { body.innerHTML = `<p class="qempty">${t("questsNone")}</p>`; return; }
+  body.innerHTML = picks.map((p, i) => questCard(p.qst, p.tv, i + 1)).join("");
+  picks.forEach((p, i) => addQuestPin(p.qst, i + 1));
+  body.querySelectorAll(".quest").forEach((card) => {
+    const id = card.dataset.qid;
+    card.addEventListener("mouseenter", () => setQuestHi(id, true));
+    card.addEventListener("mouseleave", () => setQuestHi(id, false));
+  });
 }
+// budget drags fire drawBudget rapidly; debounce the quest re-render (and its pin
+// churn) so the slider stays smooth while suggestions still refresh promptly.
+function scheduleRenderQuests() { clearTimeout(_questTimer); _questTimer = setTimeout(renderQuests, 150); }
 async function loadQuests() {
   try { quests = await (await fetch("side_quests.json")).json(); } catch { quests = []; }
   renderQuests();

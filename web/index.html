@@ -122,6 +122,21 @@
     .qlinks { margin-top: 4px; display: flex; gap: 12px; }
     .qlinks a { font-size: 10.5px; font-weight: 650; color: var(--accent); text-decoration: none; }
     .qlinks a:hover { text-decoration: underline; }
+    /* card ↔ map-pin correlation: a numbered badge on each card + a hover highlight */
+    .quest { border-radius: 9px; padding: 3px; margin: -3px; transition: background .12s; }
+    .quest.hi { background: rgba(245,158,11,0.13); }
+    .qnum { display: inline-flex; align-items: center; justify-content: center; flex: none;
+      width: 16px; height: 16px; border-radius: 50%; background: #6d28d9; color: #fff;
+      font-size: 10px; font-weight: 800; margin-right: 4px; vertical-align: middle;
+      transition: background .12s; }
+    .quest.hi .qnum { background: #f59e0b; }
+    /* side-quest map pins (rendered on the spine overlay, above the fog) */
+    .quest-pin { width: 24px; height: 24px; border-radius: 50%; box-sizing: border-box;
+      background: #6d28d9; border: 2.5px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,0.45);
+      color: #fff; font: 800 12px/1 "Inter", system-ui, sans-serif;
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+      pointer-events: auto; transition: background .12s ease, transform .12s ease; }
+    .quest-pin.hi { background: #f59e0b; transform: scale(1.3); }
 
     /* pulsing origin marker — 0-size anchor with dot + ring both centred on the
        exact point, so the pulse stays aligned with the dot at all zooms */
@@ -185,6 +200,6 @@
     <div class="qlist"></div>
   </div>
   <script src="hex.js?v=1"></script>
-  <script src="app.js?v=32"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>
