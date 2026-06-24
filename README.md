@@ -13,6 +13,8 @@ pinned: false
 
 # Montreal Multi-Modal Isochrone Map
 
+[![CI](https://github.com/HenriLD/mtl_isochrone/actions/workflows/ci.yml/badge.svg)](https://github.com/HenriLD/mtl_isochrone/actions/workflows/ci.yml)
+
 Pick a starting point on a map of Montreal, set a departure time and a time
 budget, and see everywhere reachable by transit within that budget — computed
 by a custom range-RAPTOR engine over real STM schedules.
