@@ -7,7 +7,7 @@
 
 const MONTREAL = [-73.5616, 45.5152];
 const MAX_BUDGET = 90;
-const BUS_COLOR = "#c2557f";       // one colour for all bus lines (rose; not blue/dark)
+const BUS_COLOR = "#b06d86";       // one muted rose for all bus lines — dulled so the metro/REM/exo spine stays the focus
 
 // hex geometry — must match engine/walk.py. The server sends every walkable hex
 // as [travel, q, r]; we build the polygon here. We render an OPAQUE grey hex
@@ -81,6 +81,7 @@ const map = new maplibregl.Map({
   // fully covered); minZoom keeps the bbox filling the viewport.
   maxBounds: [[BBOX.lonMin, BBOX.latMin], [BBOX.lonMax, BBOX.latMax]],
   minZoom: 9.8,
+  attributionControl: false,   // surfaced (with everything else) in the bottom-right info bubble
 });
 map.touchPitch.disable(); // keep pan + zoom + rotate; drop the pitch gesture
 
@@ -223,6 +224,7 @@ function applyLang() {
   document.querySelectorAll("#lang button").forEach((b) => b.classList.toggle("on", b.dataset.lang === lang));
   renderStatus();
   renderLegend();
+  renderInfo();
   if (typeof renderQuests === "function") renderQuests();
 }
 $("lang").addEventListener("click", (e) => {
@@ -232,6 +234,58 @@ $("lang").addEventListener("click", (e) => {
   localStorage.setItem("lang", lang);
   applyLang();
 });
+
+// --- bottom-right info bubble: data sources, credits & data-collection policy.
+// Built here (not via data-i18n) because it carries links and structure. ---
+const REPO_URL = "https://github.com/HenriLD/mtl_isochrone";
+const A = (href, txt) => `<a href="${href}" target="_blank" rel="noopener">${txt}</a>`;
+function renderInfo() {
+  const card = $("infoCard"); if (!card) return;
+  const body = card.querySelector(".ibody");
+  const osm = A("https://www.openstreetmap.org/copyright", lang === "fr" ? "les contributeurs d'OpenStreetMap" : "OpenStreetMap contributors");
+  body.innerHTML = lang === "fr" ? `
+    <h2 id="infoTitle">À propos · données</h2>
+    <p>Carte libre et gratuite de tout ce qu'on peut atteindre en transport collectif depuis n'importe quel point de la région de Montréal.</p>
+    <h3>Sources de données</h3>
+    <ul>
+      <li><b>Horaires de transport</b> — données ouvertes GTFS de la STM, d'exo et du REM.</li>
+      <li><b>Carte et réseau piéton</b> — © ${osm} (ODbL).</li>
+      <li><b>Fond de carte</b> — ${A("https://openfreemap.org/", "OpenFreeMap")} · © ${A("https://openmaptiles.org/", "OpenMapTiles")}.</li>
+      <li><b>Quêtes (textes et photos)</b> — OpenStreetMap et ${A("https://commons.wikimedia.org/", "Wikidata / Wikimedia Commons")} ; l'auteur et la licence de chaque photo accompagnent les données.</li>
+    </ul>
+    <h3>Confidentialité</h3>
+    <p>Aucun compte, aucun témoin (cookie), aucun traceur ni outil d'analyse tiers. Votre choix de langue est la seule donnée conservée — dans votre navigateur. Les clics sur la carte sont envoyés au serveur uniquement pour calculer les trajets : ils sont traités en mémoire et ne sont jamais enregistrés dans une base de données.</p>
+    <div class="ifoot">Logiciel libre — ${A(REPO_URL, "code source sur GitHub")}. © ${osm}.</div>
+  ` : `
+    <h2 id="infoTitle">About &amp; data</h2>
+    <p>A free, open map of everywhere you can reach by public transit from any point in the Montréal region.</p>
+    <h3>Data sources</h3>
+    <ul>
+      <li><b>Transit schedules</b> — STM, exo &amp; REM open GTFS feeds.</li>
+      <li><b>Map &amp; walking network</b> — © ${osm} (ODbL).</li>
+      <li><b>Basemap tiles</b> — ${A("https://openfreemap.org/", "OpenFreeMap")} · © ${A("https://openmaptiles.org/", "OpenMapTiles")}.</li>
+      <li><b>Side-quest text &amp; photos</b> — OpenStreetMap and ${A("https://commons.wikimedia.org/", "Wikidata / Wikimedia Commons")}; each photo's author &amp; licence travel with the data.</li>
+    </ul>
+    <h3>Privacy</h3>
+    <p>No accounts, no cookies, no third-party trackers or analytics. Your language choice is the only thing stored — in your own browser. Map clicks are sent to the server only to compute routes: they're processed in memory and never saved to a database.</p>
+    <div class="ifoot">Open source — ${A(REPO_URL, "view the code on GitHub")}. © ${osm}.</div>
+  `;
+}
+function setInfoOpen(open) {
+  const card = $("infoCard"), btn = $("infoBtn");
+  card.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+}
+$("infoBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  setInfoOpen($("infoCard").hidden);   // toggle
+});
+// click outside or Escape closes the popover
+document.addEventListener("click", (e) => {
+  const card = $("infoCard");
+  if (!card.hidden && !card.contains(e.target) && e.target !== $("infoBtn")) setInfoOpen(false);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") setInfoOpen(false); });
 
 // --- controls ---
 // paint the filled portion of a range input (native fill isn't stylable)
@@ -591,9 +645,18 @@ function clearQuestPins() {
   questMarkers = [];
 }
 function addQuestPin(qst, n) {
+  // Two elements: an OUTER anchor that MapLibre repositions (its inline transform
+  // is rewritten every render frame), and an INNER dot that carries the visuals
+  // and the hover transition. The anchor must stay transition-free, or MapLibre's
+  // per-frame translate gets eased over .12s and the pin lags/floats on pan+zoom.
+  // The scale-on-hover also has to live on the inner dot for the same reason
+  // (a transform on the anchor would fight MapLibre's positioning transform).
   const el = document.createElement("div");
-  el.className = "quest-pin";
-  el.textContent = n;
+  el.className = "quest-pin-anchor";
+  const dot = document.createElement("div");
+  dot.className = "quest-pin";
+  dot.textContent = n;
+  el.appendChild(dot);
   el.title = qst.name;
   el.addEventListener("mouseenter", () => setQuestHi(qst.id, true));
   el.addEventListener("mouseleave", () => setQuestHi(qst.id, false));
@@ -604,9 +667,8 @@ function addQuestPin(qst, n) {
     setTimeout(() => setQuestHi(qst.id, false), 1100);
   });
   // on the MAIN map (like the origin marker) so the pin is glued to the map's own
-  // transform and doesn't lag/float on zoom the way an overlay-synced marker does.
-  // Quests sit on reachable cells, where the desaturation mask is transparent, so
-  // they show through.
+  // transform. Quests sit on reachable cells, where the desaturation mask is
+  // transparent, so they show through.
   const marker = new maplibregl.Marker({ element: el, anchor: "center" })
     .setLngLat([qst.lon, qst.lat]).addTo(map);
   questMarkers.push({ id: qst.id, el, marker });
