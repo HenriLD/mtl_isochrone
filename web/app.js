@@ -7,7 +7,7 @@
 
 const MONTREAL = [-73.5616, 45.5152];
 const MAX_BUDGET = 90;
-const BUS_COLOR = "#c2557f";       // one colour for all bus lines (rose; not blue/dark)
+const BUS_COLOR = "#b06d86";       // one muted rose for all bus lines — dulled so the metro/REM/exo spine stays the focus
 
 // hex geometry — must match engine/walk.py. The server sends every walkable hex
 // as [travel, q, r]; we build the polygon here. We render an OPAQUE grey hex
