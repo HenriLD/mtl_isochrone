@@ -591,9 +591,18 @@ function clearQuestPins() {
   questMarkers = [];
 }
 function addQuestPin(qst, n) {
+  // Two elements: an OUTER anchor that MapLibre repositions (its inline transform
+  // is rewritten every render frame), and an INNER dot that carries the visuals
+  // and the hover transition. The anchor must stay transition-free, or MapLibre's
+  // per-frame translate gets eased over .12s and the pin lags/floats on pan+zoom.
+  // The scale-on-hover also has to live on the inner dot for the same reason
+  // (a transform on the anchor would fight MapLibre's positioning transform).
   const el = document.createElement("div");
-  el.className = "quest-pin";
-  el.textContent = n;
+  el.className = "quest-pin-anchor";
+  const dot = document.createElement("div");
+  dot.className = "quest-pin";
+  dot.textContent = n;
+  el.appendChild(dot);
   el.title = qst.name;
   el.addEventListener("mouseenter", () => setQuestHi(qst.id, true));
   el.addEventListener("mouseleave", () => setQuestHi(qst.id, false));
@@ -604,9 +613,8 @@ function addQuestPin(qst, n) {
     setTimeout(() => setQuestHi(qst.id, false), 1100);
   });
   // on the MAIN map (like the origin marker) so the pin is glued to the map's own
-  // transform and doesn't lag/float on zoom the way an overlay-synced marker does.
-  // Quests sit on reachable cells, where the desaturation mask is transparent, so
-  // they show through.
+  // transform. Quests sit on reachable cells, where the desaturation mask is
+  // transparent, so they show through.
   const marker = new maplibregl.Marker({ element: el, anchor: "center" })
     .setLngLat([qst.lon, qst.lat]).addTo(map);
   questMarkers.push({ id: qst.id, el, marker });

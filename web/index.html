@@ -130,13 +130,17 @@
       font-size: 10px; font-weight: 800; margin-right: 4px; vertical-align: middle;
       transition: background .12s; }
     .quest.hi .qnum { background: #f59e0b; }
-    /* side-quest map pins (rendered on the spine overlay, above the fog) */
+    /* side-quest map pins (MapLibre markers on the main map). The anchor is what
+       MapLibre repositions every frame — it MUST stay transition-free or the pin
+       lags/floats on pan+zoom. All visuals + the hover animation live on the
+       inner .quest-pin dot. */
+    .quest-pin-anchor { cursor: pointer; pointer-events: auto; }
     .quest-pin { width: 24px; height: 24px; border-radius: 50%; box-sizing: border-box;
       background: #374151; border: 2.5px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,0.45);
       color: #fff; font: 800 12px/1 "Inter", system-ui, sans-serif;
-      display: flex; align-items: center; justify-content: center; cursor: pointer;
-      pointer-events: auto; transition: background .12s ease, transform .12s ease; }
-    .quest-pin.hi { background: #f59e0b; transform: scale(1.3); }
+      display: flex; align-items: center; justify-content: center;
+      transition: background .12s ease, transform .12s ease; }
+    .quest-pin-anchor.hi .quest-pin { background: #f59e0b; transform: scale(1.3); }
 
     /* pulsing origin marker — 0-size anchor with dot + ring both centred on the
        exact point, so the pulse stays aligned with the dot at all zooms */
@@ -200,6 +204,6 @@
     <div class="qlist"></div>
   </div>
   <script src="hex.js?v=1"></script>
-  <script src="app.js?v=35"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>
