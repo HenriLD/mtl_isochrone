@@ -25,3 +25,9 @@ node_modules/
 # side-quest harvest caches (regenerable; side_quests.json is the artifact)
 data/raw/quests_overpass.json
 data/raw/quests_wikidata.json
+
+# Internal planning / architecture notes — kept locally, not published
+ARCHITECTURE.md
+montreal-isochrone-plan.md
+side-quests-plan.md
+ci-plan.md

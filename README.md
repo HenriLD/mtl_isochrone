@@ -11,26 +11,25 @@ pinned: false
 <!-- The YAML block above is Hugging Face Space metadata (it must be the very
      first bytes of this file). app_port must match the Dockerfile EXPOSE/port. -->
 
-# Montreal Multi-Modal Isochrone Map
+# Montréal Multi-Modal Isochrone Map
 
 [![CI](https://github.com/HenriLD/mtl_isochrone/actions/workflows/ci.yml/badge.svg)](https://github.com/HenriLD/mtl_isochrone/actions/workflows/ci.yml)
+&nbsp;[![Live demo](https://img.shields.io/badge/live%20demo-🤗%20Spaces-blue)](https://huggingface.co/spaces/HenriLD/mtl_isochrone)
 
-Pick a starting point on a map of Montreal, set a departure time and a time
-budget, and see everywhere reachable by transit within that budget — computed
-by a custom range-RAPTOR engine over real STM schedules.
+Click anywhere on a map of Montréal, set a departure time and a time budget, and
+see **everywhere you can reach by public transit** within that budget — computed
+in real time by a custom range-RAPTOR engine over the real regional timetable.
+
+**▶︎ Live demo: <https://huggingface.co/spaces/HenriLD/mtl_isochrone>**
 
 ![Reachable area around downtown Montréal revealed in full colour, with the
 metro / REM / exo transit spine cutting through the greyscale unreachable zone](docs/images/hero.jpg)
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the engineering/performance
-orientation, and [`montreal-isochrone-plan.md`](montreal-isochrone-plan.md) for
-the full multi-phase plan.
-
 The map reads as an **expanding zone**: everywhere reachable shows the basemap in
 full colour, everywhere else is the same map in **black & white**, with a
-**transit spine** (metro/REM/exo in official line colours, bus feeders in one
-rose) cutting through. The full ARTM regional network is loaded (STM + REM + exo).
-The whole UI is **bilingual** (French by default — `FR`/`EN` toggle in the panel).
+**transit spine** (metro / REM / exo in their official line colours, bus feeders
+in one rose) threading through it. The whole UI is **bilingual** — French by
+default, with an `FR` / `EN` toggle.
 
 <table>
 <tr>
@@ -43,169 +42,169 @@ The whole UI is **bilingual** (French by default — `FR`/`EN` toggle in the pan
 </tr>
 </table>
 
+## Features
+
+- **Transit isochrones** over the full ARTM regional network — STM (bus + metro),
+  REM (light metro), and exo (commuter trains + suburban buses).
+- **Instant budget slider** — drag or scroll from 5 to 90 minutes; the reachable
+  area updates in well under a millisecond (it never re-queries the server).
+- **Near→far reveal** — reachable streets light up in colour as a hex "fog"
+  streams outward from your start point; the rest stays greyscale but keeps full
+  map detail.
+- **Real journeys** — the coloured spine shows *how* you'd actually travel
+  (which metro/REM/exo lines and bus feeders), in official line colours.
+- **Side quests** — a curated set of places worth visiting (parks, eateries,
+  neighbourhoods…) surfaced near the *edge* of what you can reach, to nudge you
+  toward exploring somewhere new. Each suggestion shows travel time, a rough
+  outing length, and a link out.
+- **Bilingual** (FR / EN) and **2D-only**, locked to the data extent.
+- **Free to run and free to host** — see below.
+
 ## Cost: $0
 
-Everything here is free and runs on your machine:
+Every piece is free and open:
 
-| Piece | Source | Cost |
-|---|---|---|
-| Transit schedules | STM GTFS (open data) | free |
-| Basemap tiles | OpenFreeMap (no API key, no quota) | free |
-| Routing engine | custom Python, pure stdlib core | free |
-| Frontend | MapLibre GL (open source) | free |
+| Piece | Source |
+|---|---|
+| Transit schedules | STM / exo / REM **GTFS** (open data) |
+| Walking network | **OpenStreetMap** (via Overpass) |
+| Basemap tiles | **OpenFreeMap** (no API key, no quota) |
+| Routing engine | custom **Python, pure standard library** |
+| Frontend | **MapLibre GL** (open source) |
 
-It's built to stay cheap when deployed: the engine has **no third-party
-dependencies** (only the dev API server uses FastAPI), so it can later move to
-a free backend tier — or compile to WASM (Pyodide) for a pure static site —
-without changes.
+The engine core has **no third-party dependencies**, and the API server uses only
+**Starlette + uvicorn** (both pure-Python). That keeps the whole stack installable
+on **PyPy**, so the live demo runs on a **free Hugging Face Space** — and the same
+stdlib core could compile to WebAssembly (Pyodide) for a pure static site later.
+
+## How it works
+
+```
+GTFS + OSM ──build──► compiled network ──► RAPTOR engine ──► /api/isochrone ─┐
+ (offline scripts)     data/processed       engine/raptor.py   server/app.py │──► MapLibre (web/)
+                                                               /api/fog ──────┘
+```
+
+1. **Ingestion** (`engine/gtfs.py`, run offline): parses every feed with the
+   standard library, auto-picks the busiest weekday, and groups trips into
+   *patterns* — the RAPTOR trick: a "route" is a set of trips sharing one ordered
+   stop sequence, so finding the first catchable trip is a binary search and one
+   sweep relaxes every downstream stop.
+
+2. **Walking network** (`engine/walk.py`): an OSM pedestrian graph (~1.5 M nodes)
+   gives real street access from the clicked point to nearby stops, and real
+   footpath transfers between stops.
+
+3. **Engine** (`engine/raptor.py`): exact-schedule **range-RAPTOR**. From the
+   origin it walks to nearby stops, then scans in rounds (round *k* = reachable
+   with ≤ *k* boardings), relaxing footpath transfers each round, until the time
+   budget runs out. Every reached stop keeps a back-pointer to *how* it was
+   reached, which is reconstructed into the drawable transit spine.
+
+4. **Frontend** (`web/`): three stacked MapLibre maps — a colour basemap; a
+   tiles-less overlay drawing a grey hex grid with CSS `mix-blend-mode: saturation`
+   (this desaturates the **unreachable** area to black & white while keeping its
+   street detail); and a top overlay for the colour spine.
+
+**The budget slider is free.** Earliest-arrival times are budget-independent — a
+bigger budget just reveals more of the same tree — so the server computes one
+isochrone at the maximum budget and tags every stop, segment, and fog hex with
+its travel time. The slider is then a pure client-side layer filter
+(`travel ≤ budget`): sub-millisecond, exact, and it never touches the server. A
+new request happens only when the origin, time, or modes change.
+
+**The fog** is a multi-source flood from every reached stop across a precomputed
+hex-adjacency graph; `/api/fog` **streams** reachable hexes as NDJSON so the
+reveal opens from near to far. It rides the same cached RAPTOR run as the spine.
+
+## Side quests
+
+A small curated catalogue of ~150 places across the region — parks, eateries,
+neighbourhoods, viewpoints, markets, landmarks — each with a short blurb, a
+typical "dwell" time, and a link (official site / Wikipedia / Google Maps). On
+each query the app maps every place to its fog hex to get its travel time, then
+suggests a few that are **reachable but out toward the edge** of your budget, in
+different neighbourhoods — so the side quest is somewhere you might not otherwise
+go. The estimated outing length is `≈ 2 × travel + dwell`. It's all client-side:
+a static list plus a hex lookup, no extra server cost.
+
+## Performance & correctness
+
+A fresh query computes in roughly **80–160 ms** over the full network; the budget
+slider stays a sub-millisecond client-side filter regardless of budget. Repeated
+clicks and the paired spine/fog requests share a single cached engine run.
+
+Correctness is cross-checked against an **independent engine**: `engine/reference_csa.py`
+implements the Connection Scan Algorithm — a deliberately different method (a
+time-ordered sweep of elementary connections vs. RAPTOR's round-based route scan).
+`scripts/validate.py` runs many random (origin, departure) queries through both
+and compares earliest-arrival at every stop; they agree **exactly** (0 mismatches
+over 300k+ labels). This caught two real engine bugs during development.
+
+```bash
+python scripts/validate.py 40 90   # 40 random queries at a 90-min budget
+```
 
 ## Quick start
 
 ```bash
 pip install -r requirements.txt
 
-# 1. Transit timetable
-python scripts/download_gtfs.py     # ~60 MB STM feed -> data/raw/
-python scripts/build_network.py     # compile -> data/processed/network.pkl (~15s)
+# 1) Transit timetable  →  data/processed/network.pkl
+python scripts/download_gtfs.py
+python scripts/build_network.py
 
-# 2. Walking network (Phase 2) — real street access + transfers
-python scripts/download_osm.py      # walkable OSM via Overpass -> data/raw/osm_walk.json
-python scripts/build_walk_graph.py  # graph + transfers -> data/processed/walk_graph.pkl
-                                    # (also overwrites network transfers; run AFTER build_network)
+# 2) Walking network  →  data/processed/walk_graph.pkl   (real street access + transfers)
+python scripts/download_osm.py
+python scripts/build_walk_graph.py     # run AFTER build_network (it also rewrites transfers)
 
+# 3) Run
 python -m uvicorn server.app:app --port 8077
-# open http://127.0.0.1:8077  ->  click the map
+# open http://127.0.0.1:8077  →  click the map
 ```
 
-The server runs without step 2 — it just falls back to straight-line access and
-geometric transfers until the walk graph exists.
-
-## How it works
-
-```
-GTFS zip ──ingest──► Network (RAPTOR layout) ──pickle──► engine ──► /api/isochrone ──► MapLibre
-  scripts/download    engine/gtfs.py            data/processed   engine/raptor.py  server/app.py   web/
-```
-
-1. **Ingestion** (`engine/gtfs.py`): parses the feed with the standard library,
-   auto-selects the busiest weekday service date, and groups trips into
-   *patterns* (RAPTOR "routes" — sets of trips sharing one ordered stop
-   sequence). Builds geometric footpath transfers via a grid spatial index.
-2. **Engine** (`engine/raptor.py`): exact-schedule range-RAPTOR. From the
-   clicked origin it adds walk *access legs* to nearby stops, then runs
-   round-based scanning (round *k* = reachable with ≤ *k* boardings), relaxing
-   footpath transfers each round, until the time budget is exhausted. ~20–40 ms
-   per query over the full STM network.
-3. **API** (`server/app.py`): loads the network once, exposes
-   `/api/isochrone?lat&lon&time&budget&modes`, serves the frontend.
-4. **Frontend** (`web/`): click to set origin; mode toggles, departure-time and
-   budget sliders. The reveal uses **three stacked MapLibre maps** (see
-   [`ARCHITECTURE.md`](ARCHITECTURE.md#rendering-architecture-frontend-perf-is-here)):
-   a colour Liberty basemap; a tiles-less overlay that draws a grey hex grid with
-   CSS `mix-blend-mode: saturation` to desaturate the **unreachable** area to
-   black & white while keeping its detail; and a top overlay for the colour
-   transit spine. 2D-only; the view is locked to the data extent.
-
-   - **Fog (reachable area)**: a multi-source Dijkstra egresses from every
-     reached stop across the OSM walk graph into tessellating **hexagons**
-     (`engine/walk.py:egress_hex_graph`), tagged by travel time. The `/api/fog`
-     endpoint **streams** the reachable hexes as NDJSON; the client filters the
-     hex grid by `travel` so reachable cells stay colour and the rest desaturate.
-     Fired right after the spine request (sequential — see the GIL note in
-     `ARCHITECTURE.md`), reusing the spine's cached RAPTOR run.
-
-### Instant budget slider (compute once, filter locally)
-
-Earliest-arrival times are **budget-independent**: a bigger budget only reveals
-more of the same tree. So the server computes a single isochrone at the max
-budget (`MAX_BUDGET_MIN`, default 90) and tags every stop and segment with its
-`travel` time (seconds from departure). The budget slider is then a pure
-client-side MapLibre layer filter (`travel <= budget`) — it updates in well
-under a millisecond, follows the knob exactly (drag *or* scroll), and never hits
-the server. A new request happens only when the origin, departure time, or modes
-change (~0.5 s at max budget).
-
-### "How you get there" — the journey tree
-
-The engine doesn't just say *where* you can go, it records *how*: every reached
-stop keeps a back-pointer to the leg that reached it (which route/trip + board
-stop, or which footpath transfer). `_reconstruct_segments` turns that tree into
-drawable edges, deduping the shared trunk so the green line downtown is drawn
-once as a thick spine with bus/walk legs branching off. Transit legs carry the
-**official GTFS route color** and type; the frontend styles them (metro/REM
-thick in line colors, bus thinner, walk dashed). The engine stays
-presentation-agnostic — it only emits geometry + route metadata.
-
-This is designed in from the start so Phase 2/3 walk and bike legs extend the
-same rendering for free.
-
-## Performance
-
-Profile-driven. The fog egress *used* to be ~95% of the cost and was optimized
-away (hex-graph egress, **2924 ms → ~70 ms**); the hot path is now
-`compute_isochrone` — the origin access-walk Dijkstra over the 1.5 M-node OSM
-graph and the RAPTOR round scan. Full numbers, profile, the already-applied
-optimizations (compute-once/filter-locally, single-flight cache, sequential-not-
-parallel/GIL, compact wire formats), and ranked candidate targets are in
-**[`ARCHITECTURE.md` → Performance](ARCHITECTURE.md#performance)**.
-
-The budget slider stays a sub-millisecond client-side filter regardless.
-
-> Editing `web/app.js`? Bump the `?v=` query on its `<script>` tag in
-> `index.html`, or the browser may serve a stale cached copy.
-
-## Correctness
-
-`engine/reference_csa.py` is an independent **Connection Scan Algorithm** — a
-deliberately different method (time-ordered connection sweep vs. RAPTOR's
-round-based route scan). `scripts/validate.py` runs many random
-(origin, departure) queries through both engines and compares earliest-arrival
-labels at every stop; they agree **exactly** (0 mismatches over 300k+ labels at
-a 90-min budget). This cross-check caught two real RAPTOR bugs during
-development — chained walk→walk transfers, and order-dependent footpath seeding
-that missed valid transit→walk legs — both fixed. Run it with:
-
-```bash
-python scripts/validate.py 40 90   # 40 samples, 90-min budget
-```
-
-## Design decisions (this build)
-
-- **Exact-schedule**, single departure time — the honest "where can I get
-  leaving at 08:00" answer, using real `stop_times`. The trip-scan is
-  structured so a frequency-based mode can slot in later.
-- **Run local now, architect for cheap hosting later** — clean split between
-  offline ingestion, a portable engine, a thin API, and a static frontend.
-- **Phase-1 placeholder legs**: access/transfer use straight-line distance at a
-  walking speed. Phase 2 replaces these with a real OSM walk graph.
+Step 2 is optional — without a walk graph the engine falls back to straight-line
+access and geometric transfers. The side-quest catalogue (`web/side_quests.json`
+and its thumbnails) is committed, so the panel works out of the box.
 
 ## Coverage
 
-The full **ARTM regional network**: STM (bus + metro), **REM** (light metro),
-and **exo** (commuter trains + 11 suburban bus sectors) — all 14 feeds in
-`config.GTFS_FEEDS`. Note REM is GTFS `route_type 0` and exo buses are `1501`;
-the engine maps types `{0,1,2}` to the rapid-transit "spine" and everything else
-to buses (`ROUTE_TYPE_MODE` / `SPINE_TYPES`).
-
+The full **ARTM regional network** (14 GTFS feeds in `config.py`): STM bus +
+metro, REM light metro, and exo commuter trains plus its suburban bus sectors.
 The OSM walk graph covers the island **plus the near north shore (Laval) and
-south shore (Longueuil / Brossard / Boucherville)** — `OSM_BBOX` in `config.py`.
-Those areas get real street-network hex fog. Far exurbs (beyond the bbox) fall
-back to straight-line access/transfers and a cheap egress-disc fog
-(`egress_hex_disc`). Widening coverage is just `OSM_BBOX` → re-download →
-`build_walk_graph` (the fog egress stays cheap regardless of graph size).
+south shore (Longueuil / Brossard / Boucherville)**; those areas get real
+street-network fog, while far exurbs fall back to a cheap straight-line egress.
+Widening coverage is just a bounding-box change in `config.py` and a re-build.
 
-Walk/transfer legs are not drawn (they cluttered the map); the spine shows
-transit legs only.
+Transit geometry: buses follow GTFS `shapes.txt`, lightly corner-rounded so they
+read smoothly; the metro traces real **OpenStreetMap tunnel geometry** (the GTFS
+metro shapes were too coarse). Walk and transfer legs aren't drawn — only the
+transit spine — to keep the map clean.
 
-## Limitations / next (per the plan)
-- **Fog is a ~140 m egress grid, not a crisp contour** — a true street-network
-  egress, but a hex grid rather than a sharp isochrone boundary. Crisp
-  time-banded polygons are Phase 4.
-- **Transit geometry**: buses trace simplified GTFS `shapes.txt`; metro traces
-  **OSM tunnel geometry** (GTFS metro shapes were ~1 pt/station — replaced, see
-  `ARCHITECTURE.md`). Walk legs aren't drawn (they cluttered the map).
+## Development
 
-## Tuning
+```bash
+python -m unittest discover -s tests        # engine (RAPTOR == CSA) + geometry + assets
+node tests/hexkey_contract.js               # JS hex projection matches the engine
+```
 
-Knobs live in `config.py`: walk speed, access/transfer radii, and `SERVICE_DATE`
-(leave `None` to auto-pick the busiest weekday in the feed).
+GitHub Actions runs these on every push — engine correctness, a PyPy install
+check (the runtime the demo deploys on), and the frontend/contract checks — and
+**auto-deploys** the demo to the Hugging Face Space on a green push to `main`.
+Knobs (walk speed, access/transfer radii, budgets, service date, coverage box)
+live in `config.py`.
+
+> Editing `web/app.js`? Bump the `?v=` query on its `<script>` tag in
+> `web/index.html`, or the browser may serve a stale cached copy.
+
+## Credits & data
+
+- Transit schedules: **Société de transport de Montréal (STM)**, **exo**, and
+  **REM** open GTFS feeds.
+- Map data: **© OpenStreetMap contributors** (ODbL); basemap tiles by
+  **OpenFreeMap**; rendering by **MapLibre GL**.
+- Side-quest descriptions and photos: **OpenStreetMap** and **Wikidata /
+  Wikimedia Commons** — each photo's author and licence are stored alongside it
+  in `web/side_quests.json`.
+
+Built for Montréal. 🚇
