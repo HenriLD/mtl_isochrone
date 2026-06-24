@@ -104,12 +104,11 @@ function overlayMap(container) {
 }
 const maskMap = overlayMap("maskmap");
 const spineMap = overlayMap("spinemap");
-// The mask map rasterises ~80k grey hexes and is then composited over the base
-// every frame via the `saturation` blend — the heaviest overlay. Render it at a
-// capped pixel ratio (the desaturation result reads detail from the colour map
-// below, so the mask's own resolution barely matters): up to 4x fewer pixels to
-// rasterise + blend on a retina display. Guarded — API varies by MapLibre build.
-try { if (maskMap.setPixelRatio) maskMap.setPixelRatio(Math.min(1.25, window.devicePixelRatio || 1)); } catch (e) {}
+// The overlays keep the base map's DEFAULT pixel ratio so they stay pixel-aligned
+// with it across device-pixel-ratio changes (browser zoom, or dragging the window
+// between a retina and non-retina monitor). A previous optimisation pinned the
+// mask to a fixed lower pixelRatio at load; because it was never re-applied, a
+// later DPI change left the fog rendered with a visible, sticky offset.
 let maskReady = false, spineReady = false;
 function syncOverlays() {
   const cam = {
@@ -120,7 +119,11 @@ function syncOverlays() {
   spineMap.jumpTo(cam);
 }
 map.on("move", syncOverlays);
-map.on("resize", () => { maskMap.resize(); spineMap.resize(); });
+// Keep the overlays locked to the main map's ACTUAL camera on every change — not
+// only manual pans. resize() can re-clamp the centre (maxBounds) without firing
+// "move", and the initial camera settles on load; re-syncing here closes both gaps.
+map.on("load", syncOverlays);
+map.on("resize", () => { maskMap.resize(); spineMap.resize(); syncOverlays(); });
 
 // Shed per-frame work WHILE the camera is moving, restore it the moment it stops:
 //  • drop the panels' backdrop blur (CSS .panning), and
@@ -133,6 +136,7 @@ map.on("movestart", () => {
     spineMap.setLayoutProperty("spine-arrows", "visibility", "none");
 });
 map.on("moveend", () => {
+  syncOverlays();                 // final resync once the camera settles (self-heal)
   document.body.classList.remove("panning");
   if (spineReady && spineMap.getLayer("spine-arrows"))
     spineMap.setLayoutProperty("spine-arrows", "visibility", "visible");
