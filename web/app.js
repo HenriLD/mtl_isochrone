@@ -640,17 +640,29 @@ function setQuestHi(id, on) {
   const card = document.querySelector(`#quests .quest[data-qid="${CSS.escape(id)}"]`);
   if (card) card.classList.toggle("hi", on);
 }
+// Quest pins live in #pinlayer — a transparent overlay stacked ABOVE the spine and
+// the desaturation hex mask — so a pin stays visible even when it falls in the grey
+// (out-of-budget / unreachable) zone, and the spine never draws over it. We can't
+// use a maplibregl.Marker for this: a marker on the main map sits below the overlays,
+// and a marker on the top overlay map floats (that map's camera trails the main map
+// by a frame). Instead we position the pins ourselves from the MAIN map's live
+// projection on every "move" frame, so they're glued with zero sync lag.
+const pinLayer = $("pinlayer");
+function positionPins() {
+  for (const m of questMarkers) {
+    const p = map.project([m.lon, m.lat]);
+    m.el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%)`;
+  }
+}
+map.on("move", positionPins);
 function clearQuestPins() {
-  for (const m of questMarkers) m.marker.remove();
+  for (const m of questMarkers) m.el.remove();
   questMarkers = [];
 }
 function addQuestPin(qst, n) {
-  // Two elements: an OUTER anchor that MapLibre repositions (its inline transform
-  // is rewritten every render frame), and an INNER dot that carries the visuals
-  // and the hover transition. The anchor must stay transition-free, or MapLibre's
-  // per-frame translate gets eased over .12s and the pin lags/floats on pan+zoom.
-  // The scale-on-hover also has to live on the inner dot for the same reason
-  // (a transform on the anchor would fight MapLibre's positioning transform).
+  // OUTER anchor = the positioned element (its transform is rewritten each frame, so
+  // it must stay transition-free or it would ease/lag). INNER dot = visuals + the
+  // hover scale (scaling the anchor would fight its positioning transform).
   const el = document.createElement("div");
   el.className = "quest-pin-anchor";
   const dot = document.createElement("div");
@@ -660,18 +672,15 @@ function addQuestPin(qst, n) {
   el.title = qst.name;
   el.addEventListener("mouseenter", () => setQuestHi(qst.id, true));
   el.addEventListener("mouseleave", () => setQuestHi(qst.id, false));
-  el.addEventListener("click", () => {           // click a pin -> reveal its card
+  el.addEventListener("click", (e) => {          // click a pin -> reveal its card
+    e.stopPropagation();
     const card = document.querySelector(`#quests .quest[data-qid="${CSS.escape(qst.id)}"]`);
     if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     setQuestHi(qst.id, true);
     setTimeout(() => setQuestHi(qst.id, false), 1100);
   });
-  // on the MAIN map (like the origin marker) so the pin is glued to the map's own
-  // transform. Quests sit on reachable cells, where the desaturation mask is
-  // transparent, so they show through.
-  const marker = new maplibregl.Marker({ element: el, anchor: "center" })
-    .setLngLat([qst.lon, qst.lat]).addTo(map);
-  questMarkers.push({ id: qst.id, el, marker });
+  pinLayer.appendChild(el);
+  questMarkers.push({ id: qst.id, el, lon: qst.lon, lat: qst.lat });
 }
 function renderQuests() {
   const el = $("quests"); if (!el) return;
@@ -682,6 +691,7 @@ function renderQuests() {
   if (!picks.length) { body.innerHTML = `<p class="qempty">${t("questsNone")}</p>`; return; }
   body.innerHTML = picks.map((p, i) => questCard(p.qst, p.tv, i + 1)).join("");
   picks.forEach((p, i) => addQuestPin(p.qst, i + 1));
+  positionPins();                              // place them at the current camera now (before any "move")
   body.querySelectorAll(".quest").forEach((card) => {
     const id = card.dataset.qid;
     card.addEventListener("mouseenter", () => setQuestHi(id, true));
